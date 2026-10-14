@@ -72,6 +72,13 @@ function chooseInitiator(ctx: TickContext, x: AgentId, y: AgentId): [AgentId, Ag
   return rng(ctx.seed, ctx.tick, x, y, 'init') < 0.5 ? [x, y] : [y, x]
 }
 
+/** A fact A has committed to confiding to B (validated at commit: A knows it). Only if B doesn't know it yet. */
+function intendedConfidence(ctx: TickContext, a: AgentId, b: AgentId): FactDef | undefined {
+  const i = ctx.state.intents.find((x) => x.agentId === a && x.kind === 'confide' && x.target === b && x.fact)
+  if (!i?.fact || knows(ctx.state, b, i.fact)) return undefined
+  return factDef(i.fact)
+}
+
 export function pairFeatures(ctx: TickContext, a: AgentId, b: AgentId): Features {
   const s = ctx.state
   const ab = edge(s, a, b)
@@ -112,7 +119,7 @@ export function pairFeatures(ctx: TickContext, a: AgentId, b: AgentId): Features
     withhold: flag('withhold'),
     observe: flag('observe'),
     avoid: intentWeight(ctx, a, 'avoid', b) > 0 || intentWeight(ctx, b, 'avoid', a) > 0 ? 1 : 0,
-    aHasShareable: shareableFacts(s, a, b).length ? 1 : 0,
+    aHasShareable: shareableFacts(s, a, b).length || intendedConfidence(ctx, a, b) ? 1 : 0,
     aHasGossip: gossipFacts(s, a, b).length ? 1 : 0,
     aHasConfided: confidedFacts(s, a, b).length ? 1 : 0,
     aHoldsSecret: heldSecrets(s, a, b).length ? 1 : 0,
@@ -202,7 +209,8 @@ function resolvePair(ctx: TickContext, a: AgentId, b: AgentId, present: AgentId[
   let fact: FactDef | undefined
   let victim: AgentId | undefined
   if (outcome === 'confide') {
-    fact = chooseFact(shareableFacts(s, a, b), a, b, 'confide', seed, tick, a, b, 'fact')
+    // An agent who decided what to confide gets to say that — past their usual caution.
+    fact = intendedConfidence(ctx, a, b) ?? chooseFact(shareableFacts(s, a, b), a, b, 'confide', seed, tick, a, b, 'fact')
   } else if (outcome === 'gossip') {
     fact = chooseFact(gossipFacts(s, a, b), a, b, 'gossip', seed, tick, a, b, 'fact')
   } else if (outcome === 'betray') {

@@ -7,8 +7,9 @@ Design: [`fortitude-spec.md`](fortitude-spec.md) · Decisions and corrections: [
 ## Status
 
 - **Phase 0 — headless world:** done. Deterministic tick loop, schedules, encounters, directed relationships with grudges, a knowledge/secrets model, station decay and incidents, SQLite persistence, exact replay.
-- **Phase 1 — agent runtime:** done (verified against a mock backend). Context packets, structured responses, intent queue with adjudication, wake triggers, attention budgets, an OpenAI-compatible backend.
-- Phase 2+ (twelve agents, reflection, Alita adapter, player): not started.
+- **Phase 1 — agent runtime:** done, verified on DeepSeek. Context packets, structured responses, intent queue with adjudication, wake triggers, attention budgets, an OpenAI-compatible backend.
+- **Phase 2 — the whole cast:** done. All eleven residents LLM-backed, with a daily reflection pass (goals, opinions, beliefs, memory consolidation, private journals), three memory tiers with caps, speech and confiding as adjudicated knowledge transfers. ~35 LLM calls per in-world day.
+- Phase 3 (Alita adapter), Phase 4 (player): next.
 
 ## Setup
 
@@ -29,7 +30,13 @@ npm run sim -- --days 30 --seed fortitude-1 --log out/log.txt
 npm run sim -- --days 30 --db data/p0.db --world w1
 npm run replay -- --db data/p0.db --world w1
 
-# Phase 1: one LLM agent. --lockstep waits for turns between ticks (debug only)
+# The world, running: 60 s ticks, whole cast, real time. Ctrl+C stops cleanly; restart catches up.
+npm start
+npm start -- --tick-ms 10000 --world w2
+npm run turns -- --world fortitude --errors        # LLM cost / failures
+
+# Lockstep runs (--lockstep waits for turns between ticks; debug only)
+npm run agent -- --agent all --days 3 --lockstep --quiet --log out/run.txt
 npm run agent -- --agent sera --days 3 --lockstep
 npm run agent -- --agent sera --days 3 --lockstep --mock      # no API key needed
 npm run agent -- --agent sera,kavi --days 1 --tick-ms 5000    # real time; the loop never waits

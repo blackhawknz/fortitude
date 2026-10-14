@@ -41,11 +41,12 @@ export interface ContextPacket {
   agent: {
     id: string
     name: string
+    pronouns: string
     role: string
     personality: string
     voice: string
     backstory: string
-    goals: { id: string; text: string; weight: number; progress: number | null; note: string | null }[]
+    goals: { id: string; text: string; weight: number; progress: number | null; note: string | null; yours: boolean }[]
     secret: string
     unspoken_want: string
     traits: Record<string, number>
@@ -59,9 +60,11 @@ export interface ContextPacket {
     inventory: string[]
     current_intents: { kind: string; target?: string; to?: string; reason: string; until: string }[]
   }
-  knowledge: string[]
+  knowledge: { id: string; text: string; how: string }[]
+  beliefs: string[]
+  recent_days: string[]
   private_memory: string[]
-  relationships: { id: string; name: string; trust: number; warmth: number; tension: number; resentment: number; label: string; lastInteraction: string | null }[]
+  relationships: { id: string; name: string; trust: number; warmth: number; tension: number; resentment: number; label: string; lastInteraction: string | null; your_view: string | null }[]
   people_here: { id: string; name: string; activity: string; asleep: boolean }[]
   recent_events: { when: string; type: string; text: string }[]
   trigger: { kind: TriggerKind; detail: string; urgency: number }
@@ -74,7 +77,7 @@ export interface ContextPacket {
     rumours: string[]
   }
   places: { id: string; name: string; open_to_you: boolean }[]
-  people: { id: string; name: string; role: string }[]
+  people: { id: string; name: string; pronouns: string; role: string }[]
   available_actions: readonly string[]
 }
 
@@ -85,23 +88,31 @@ export function buildContextPacket(store: WorldStore, state: WorldState, agentId
   const c = castMember(agentId)
   const a = state.agents[agentId]!
   const loc = locationDef(a.locationId)
-  const beliefs = new Map(store.goalBeliefs(state.id, agentId).map((g) => [g.id, g]))
 
   const known = Object.values(state.knowledge[agentId] ?? {}).sort((x, y) => x.tick - y.tick || (x.fact < y.fact ? -1 : 1))
   const knowledge = known.map((k) => {
     const f = factDef(k.fact)
     const how =
       k.source.kind === 'self'
-        ? ''
+        ? 'you have always known'
         : k.source.kind === 'told'
-          ? ` (${castMember(k.source.by).name} told you${k.source.confided ? ', in confidence' : ''})`
+          ? `${castMember(k.source.by).name} told you${k.source.confided ? ', in confidence' : ''}`
           : k.source.kind === 'overheard'
-            ? ` (you overheard ${castMember(k.source.from).name})`
+            ? `you overheard ${castMember(k.source.from).name}`
             : k.source.kind === 'evidence'
-              ? ` (you found it at ${locationDef(k.source.locationId).name})`
-              : ` (you noticed it watching ${castMember(k.source.subject).name})`
-    return f.text + how
+              ? `you found it at ${locationDef(k.source.locationId).name}`
+              : `you noticed it watching ${castMember(k.source.subject).name}`
+    return { id: f.id, text: f.text, how }
   })
+  const semantic = store.semantic(state.id, agentId, 60)
+  const beliefs = semantic.filter((r) => r.kind === 'belief').map((r) => r.text)
+  const recent_days = semantic
+    .filter((r) => r.kind === 'summary')
+    .sort((x, y) => y.updatedTick - x.updatedTick)
+    .slice(0, 4)
+    .reverse()
+    .map((r) => r.text)
+  const opinions = new Map(semantic.filter((r) => r.kind === 'opinion' && r.subjectId).map((r) => [r.subjectId!, r.text]))
   const rumours = known
     .filter((k) => (k.source.kind === 'told' && !k.source.confided) || k.source.kind === 'overheard')
     .slice(-5)
@@ -125,6 +136,7 @@ export function buildContextPacket(store: WorldStore, state: WorldState, agentId
         resentment: Math.round(e.grudge),
         label: RELATIONSHIP_LABEL[e.type],
         lastInteraction: e.history.at(-1) ?? null,
+        your_view: opinions.get(o.id) ?? null,
       }
     })
     .sort((x, y) => Math.abs(y.warmth + y.trust - y.tension * 2 - 60) - Math.abs(x.warmth + x.trust - x.tension * 2 - 60))
@@ -147,17 +159,19 @@ export function buildContextPacket(store: WorldStore, state: WorldState, agentId
     agent: {
       id: c.id,
       name: c.name,
+      pronouns: c.pronouns,
       role: c.role,
       personality: c.personality,
       voice: c.voice,
       backstory: c.backstory,
-      goals: a.goals.map((g) => ({
+      // The sim's progress number is not something a person can perceive. They see their own estimate.
+      goals: store.agentGoals(state.id, agentId).map((g) => ({
         id: g.id,
         text: g.text,
         weight: g.weight,
-        // The sim's progress number is not something a person can perceive. They see their own estimate.
-        progress: beliefs.get(g.id)?.perceivedProgress ?? null,
-        note: beliefs.get(g.id)?.note ?? null,
+        progress: g.perceivedProgress ?? null,
+        note: g.note ?? null,
+        yours: g.origin === 'agent',
       })),
       secret: c.secret.text,
       unspoken_want: c.unspoken,
@@ -175,6 +189,8 @@ export function buildContextPacket(store: WorldStore, state: WorldState, agentId
         .map((i) => ({ kind: i.kind, target: i.target, to: i.to, reason: i.reason, until: formatTime(i.expiresTick) })),
     },
     knowledge,
+    beliefs,
+    recent_days,
     private_memory,
     relationships,
     people_here,
@@ -195,7 +211,7 @@ export function buildContextPacket(store: WorldStore, state: WorldState, agentId
       rumours,
     },
     places: LOCATIONS.map((l) => ({ id: l.id, name: l.name, open_to_you: canEnter(state, agentId, l.id, state.tick) === null })),
-    people: CAST.filter((o) => o.id !== agentId).map((o) => ({ id: o.id, name: o.name, role: o.role })),
-    available_actions: INTENT_KINDS,
+    people: CAST.filter((o) => o.id !== agentId).map((o) => ({ id: o.id, name: o.name, pronouns: o.pronouns, role: o.role })),
+    available_actions: INTENT_KINDS.filter((k) => k !== 'speak'),
   }
 }

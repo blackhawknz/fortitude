@@ -231,6 +231,13 @@ export interface IntentProposal {
   /** Only for `speak`: the line, generative payload. Never read for adjudication. */
   say?: string
   register?: 'open' | 'guarded' | 'warm' | 'cold' | 'formal'
+  /**
+   * For `speak` and `confide`: a fact the agent chooses to reveal. This IS
+   * adjudicated — the speaker must know it — and on success it moves into
+   * the listener's head (and maybe bystanders'). This keeps what the words
+   * say and what the sim believes was learned in step.
+   */
+  fact?: FactId
 }
 
 export interface Intent extends IntentProposal {
@@ -303,7 +310,7 @@ export interface WorldSettings {
 export const DEFAULT_SETTINGS: WorldSettings = {
   romance: false,
   death: false,
-  hullDecayPerDay: 0.35,
+  hullDecayPerDay: 0.12, // ~530 in-world days from 64 to 0; at 60 s ticks ≈ 9 real days of continuous running
   encounterBase: -0.1,
 }
 

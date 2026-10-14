@@ -7,6 +7,8 @@ CREATE TABLE `agent_goals` (
 	`progress` real DEFAULT 0 NOT NULL,
 	`perceived_progress` real,
 	`note` text,
+	`origin` text DEFAULT 'authored' NOT NULL,
+	`status` text DEFAULT 'active' NOT NULL,
 	`created_tick` integer DEFAULT 0 NOT NULL,
 	`resolved_tick` integer,
 	PRIMARY KEY(`world_id`, `agent_id`, `id`)

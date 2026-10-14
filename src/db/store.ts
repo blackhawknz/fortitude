@@ -453,6 +453,181 @@ export class WorldStore {
       .all()
   }
 
+  // ─── Memory tiers (agent-owned; never read by the sim) ───────────────
+
+  /** Episodic rows since a tick, oldest first, with ids (for reflection). */
+  episodicSince(worldId: string, agentId: string, sinceTick: number, limit = 60): MemoryRow[] {
+    return this.db
+      .select({ id: t.agentMemoryEpisodic.id, text: t.agentMemoryEpisodic.text, importance: t.agentMemoryEpisodic.importance, tick: t.agentMemoryEpisodic.tick, private: t.agentMemoryEpisodic.private, origin: t.agentMemoryEpisodic.origin })
+      .from(t.agentMemoryEpisodic)
+      .where(and(eq(t.agentMemoryEpisodic.worldId, worldId), eq(t.agentMemoryEpisodic.agentId, agentId), gte(t.agentMemoryEpisodic.tick, sinceTick)))
+      .orderBy(asc(t.agentMemoryEpisodic.tick), asc(t.agentMemoryEpisodic.id))
+      .limit(limit)
+      .all()
+  }
+
+  /** Forget: delete only rows that belong to this agent. Returns how many went. */
+  forgetEpisodic(worldId: string, agentId: string, ids: number[]): number {
+    if (!ids.length) return 0
+    return this.db
+      .delete(t.agentMemoryEpisodic)
+      .where(and(eq(t.agentMemoryEpisodic.worldId, worldId), eq(t.agentMemoryEpisodic.agentId, agentId), inArray(t.agentMemoryEpisodic.id, ids)))
+      .run().changes
+  }
+
+  /** Keep: mark as more important so pruning spares it. */
+  reinforceEpisodic(worldId: string, agentId: string, ids: number[]): void {
+    if (!ids.length) return
+    this.db
+      .update(t.agentMemoryEpisodic)
+      .set({ importance: sql`min(5, ${t.agentMemoryEpisodic.importance} + 1)` })
+      .where(and(eq(t.agentMemoryEpisodic.worldId, worldId), eq(t.agentMemoryEpisodic.agentId, agentId), inArray(t.agentMemoryEpisodic.id, ids)))
+      .run()
+  }
+
+  /**
+   * Hard cap on the episodic tier. Score = tick + importance × 72, so one
+   * point of importance is worth three in-world days of recency.
+   */
+  pruneEpisodic(worldId: string, agentId: string, cap = 200): number {
+    return this.db.$client
+      .prepare(
+        `DELETE FROM agent_memory_episodic WHERE world_id = ? AND agent_id = ? AND id NOT IN (
+           SELECT id FROM agent_memory_episodic WHERE world_id = ? AND agent_id = ?
+           ORDER BY tick + importance * 72 DESC, id DESC LIMIT ?)`,
+      )
+      .run(worldId, agentId, worldId, agentId, cap).changes
+  }
+
+  /** One opinion per subject; a new one replaces the old. `stance` is −1..1. */
+  setOpinion(worldId: string, agentId: string, subjectId: string, text: string, stance: number, tick: number): void {
+    this.tx(() => {
+      this.db
+        .delete(t.agentMemorySemantic)
+        .where(and(eq(t.agentMemorySemantic.worldId, worldId), eq(t.agentMemorySemantic.agentId, agentId), eq(t.agentMemorySemantic.kind, 'opinion'), eq(t.agentMemorySemantic.subjectId, subjectId)))
+        .run()
+      this.db.insert(t.agentMemorySemantic).values({ worldId, agentId, text, kind: 'opinion', subjectId, weight: stance, updatedTick: tick }).run()
+    })
+  }
+
+  opinionOf(worldId: string, agentId: string, subjectId: string): { text: string; stance: number } | null {
+    const r = this.db
+      .select()
+      .from(t.agentMemorySemantic)
+      .where(and(eq(t.agentMemorySemantic.worldId, worldId), eq(t.agentMemorySemantic.agentId, agentId), eq(t.agentMemorySemantic.kind, 'opinion'), eq(t.agentMemorySemantic.subjectId, subjectId)))
+      .get()
+    return r ? { text: r.text, stance: r.weight } : null
+  }
+
+  addSemantic(worldId: string, agentId: string, kind: 'belief' | 'summary', text: string, weight: number, tick: number): void {
+    this.db.insert(t.agentMemorySemantic).values({ worldId, agentId, text, kind, weight, updatedTick: tick }).run()
+  }
+
+  replaceBelief(worldId: string, agentId: string, id: number, text: string, weight: number, tick: number): boolean {
+    return (
+      this.db
+        .update(t.agentMemorySemantic)
+        .set({ text, weight, updatedTick: tick })
+        .where(and(eq(t.agentMemorySemantic.worldId, worldId), eq(t.agentMemorySemantic.agentId, agentId), eq(t.agentMemorySemantic.id, id), eq(t.agentMemorySemantic.kind, 'belief')))
+        .run().changes > 0
+    )
+  }
+
+  dropSemantic(worldId: string, agentId: string, ids: number[]): void {
+    if (!ids.length) return
+    this.db
+      .delete(t.agentMemorySemantic)
+      .where(and(eq(t.agentMemorySemantic.worldId, worldId), eq(t.agentMemorySemantic.agentId, agentId), inArray(t.agentMemorySemantic.id, ids)))
+      .run()
+  }
+
+  /**
+   * Semantic tier cap (spec: 50). Opinions are kept (bounded by cast size);
+   * the most recent 14 summaries are kept; beliefs fill the rest by weight.
+   */
+  pruneSemantic(worldId: string, agentId: string, cap = 50, summaries = 14): void {
+    const all = this.db
+      .select()
+      .from(t.agentMemorySemantic)
+      .where(and(eq(t.agentMemorySemantic.worldId, worldId), eq(t.agentMemorySemantic.agentId, agentId)))
+      .all()
+    const opinions = all.filter((r) => r.kind === 'opinion')
+    const sums = all.filter((r) => r.kind === 'summary').sort((a, b) => b.updatedTick - a.updatedTick || b.id - a.id)
+    const beliefs = all.filter((r) => r.kind === 'belief').sort((a, b) => Math.abs(b.weight) - Math.abs(a.weight) || b.updatedTick - a.updatedTick)
+    const keepSums = sums.slice(0, summaries)
+    const room = Math.max(0, cap - opinions.length - keepSums.length)
+    const keep = new Set([...opinions, ...keepSums, ...beliefs.slice(0, room)].map((r) => r.id))
+    this.dropSemantic(worldId, agentId, all.filter((r) => !keep.has(r.id)).map((r) => r.id))
+  }
+
+  /** All goals the agent holds: authored (with sim progress) and their own. */
+  agentGoals(worldId: string, agentId: string) {
+    return this.db
+      .select()
+      .from(t.agentGoals)
+      .where(and(eq(t.agentGoals.worldId, worldId), eq(t.agentGoals.agentId, agentId), eq(t.agentGoals.status, 'active')))
+      .orderBy(asc(t.agentGoals.createdTick), asc(t.agentGoals.id))
+      .all()
+  }
+
+  /** Agent-origin goals only: add, revise or drop. Authored goals can only be annotated. */
+  upsertAgentGoal(worldId: string, agentId: string, g: { id: string; text: string; weight: number; status: 'active' | 'dropped'; note?: string; perceived?: number }, tick: number): 'created' | 'updated' | 'annotated' {
+    const existing = this.db
+      .select()
+      .from(t.agentGoals)
+      .where(and(eq(t.agentGoals.worldId, worldId), eq(t.agentGoals.agentId, agentId), eq(t.agentGoals.id, g.id)))
+      .get()
+    if (existing?.origin === 'authored') {
+      this.setGoalBelief(worldId, agentId, g.id, g.perceived ?? existing.perceivedProgress ?? undefined, g.note ?? existing.note ?? undefined)
+      return 'annotated'
+    }
+    if (existing) {
+      this.db
+        .update(t.agentGoals)
+        // Anything not restated is kept, not wiped.
+        .set({
+          text: g.text,
+          weight: g.weight,
+          status: g.status,
+          note: g.note ?? existing.note,
+          perceivedProgress: g.perceived ?? existing.perceivedProgress,
+          resolvedTick: g.status === 'dropped' ? tick : null,
+        })
+        .where(and(eq(t.agentGoals.worldId, worldId), eq(t.agentGoals.agentId, agentId), eq(t.agentGoals.id, g.id)))
+        .run()
+      return 'updated'
+    }
+    this.db
+      .insert(t.agentGoals)
+      .values({ worldId, agentId, id: g.id, text: g.text, weight: g.weight, origin: 'agent', status: g.status, note: g.note ?? null, perceivedProgress: g.perceived ?? null, createdTick: tick })
+      .run()
+    return 'created'
+  }
+
+  writeJournal(worldId: string, agentId: string, day: number, text: string): void {
+    this.db
+      .insert(t.journals)
+      .values({ worldId, agentId, day, text })
+      .onConflictDoUpdate({ target: [t.journals.worldId, t.journals.agentId, t.journals.day], set: { text } })
+      .run()
+  }
+
+  journals(worldId: string, agentId?: string) {
+    const conds = [eq(t.journals.worldId, worldId)]
+    if (agentId) conds.push(eq(t.journals.agentId, agentId))
+    return this.db.select().from(t.journals).where(and(...conds)).orderBy(asc(t.journals.day), asc(t.journals.agentId)).all()
+  }
+
+  lastReflectTick(worldId: string, agentId: string): number | null {
+    return (
+      this.db
+        .select({ tick: sql<number>`max(${t.agentTurns.tick})` })
+        .from(t.agentTurns)
+        .where(and(eq(t.agentTurns.worldId, worldId), eq(t.agentTurns.agentId, agentId), eq(t.agentTurns.kind, 'reflect'), eq(t.agentTurns.status, 'ok')))
+        .get()?.tick ?? null
+    )
+  }
+
   // ─── Turn log ────────────────────────────────────────────────────────
 
   logTurn(row: Omit<typeof t.agentTurns.$inferInsert, 'id' | 'createdAt'>): void {
@@ -516,7 +691,7 @@ function intentToRow(worldId: string, i: Intent): typeof t.intents.$inferInsert 
     kind: i.kind,
     target: i.target ?? null,
     toLocation: i.to ?? null,
-    payloadJson: i.say !== undefined || i.register !== undefined ? J({ say: i.say, register: i.register }) : null,
+    payloadJson: i.say !== undefined || i.register !== undefined || i.fact !== undefined ? J({ say: i.say, register: i.register, fact: i.fact }) : null,
     reason: i.reason,
     weight: i.weight,
     source: i.source,
@@ -529,7 +704,7 @@ function intentToRow(worldId: string, i: Intent): typeof t.intents.$inferInsert 
 }
 
 function rowToIntent(r: typeof t.intents.$inferSelect): Intent {
-  const payload = P<{ say?: string; register?: Intent['register'] }>(r.payloadJson, {})
+  const payload = P<{ say?: string; register?: Intent['register']; fact?: string }>(r.payloadJson, {})
   const i: Intent = {
     id: r.id,
     agentId: r.agentId,
@@ -546,6 +721,7 @@ function rowToIntent(r: typeof t.intents.$inferSelect): Intent {
   if (r.toLocation) i.to = r.toLocation
   if (payload.say !== undefined) i.say = payload.say
   if (payload.register !== undefined) i.register = payload.register
+  if (payload.fact !== undefined) i.fact = payload.fact
   if (r.rejectReason) i.rejectReason = r.rejectReason
   return i
 }

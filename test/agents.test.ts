@@ -64,7 +64,7 @@ describe('response parsing', () => {
       ['g-seal'],
     )
     expect(r.intents.map((i) => i.kind)).toEqual(['seek', 'move', 'rest'])
-    expect(r.intents[1]!.expiresTick).toBe(148) // clamped horizon
+    expect(r.intents[1]!.expiresTick).toBe(149) // clamped horizon: applied next tick, then 48h
     expect(r.intents[1]!.weight).toBe(0.4) // coerced
     expect(r.mood).toBeNull()
     expect(r.goalUpdates.map((g) => g.id)).toEqual(['g-seal'])
@@ -212,8 +212,8 @@ describe('nothing bypasses the resolver', () => {
   })
 
   it('timeouts and backend errors never stall the loop', async () => {
-    const hang: AgentBackend = { name: 'hang', turn: () => new Promise(() => {}) }
-    const boom: AgentBackend = { name: 'boom', turn: async () => { throw new Error('500 upstream') } }
+    const hang: AgentBackend = { name: 'hang', turn: () => new Promise(() => {}), reflect: () => new Promise(() => {}) }
+    const boom: AgentBackend = { name: 'boom', turn: async () => { throw new Error('500 upstream') }, reflect: async () => { throw new Error('500 upstream') } }
     const w = withRuntime('fail', { sera: hang, kavi: boom }, { turnTimeoutMs: 50 })
     for (let i = 0; i < 30; i++) w.engine.step() // the loop does not wait
     expect(w.engine.state.tick).toBe(30)

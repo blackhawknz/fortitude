@@ -40,8 +40,12 @@ export function inHours(hour: number, from: number, to: number): boolean {
   return from <= to ? hour >= from && hour < to : hour >= from || hour < to
 }
 
-/** Real-time speed presets: milliseconds per tick. */
-export const SPEEDS = { watch: 5_000, default: 10_000, relaxed: 30_000, slow: 60_000 } as const
+/**
+ * Real-time speed presets: milliseconds per tick.
+ * Default 60 s: one in-world day = 24 real minutes. A game you check in on,
+ * at ~100 LLM turns per real hour for the full cast (see docs/decisions.md).
+ */
+export const SPEEDS = { watch: 10_000, brisk: 30_000, default: 60_000, slow: 120_000 } as const
 export type SpeedName = keyof typeof SPEEDS
 
 /** Never run more than this many ticks when resuming after downtime. */

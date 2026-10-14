@@ -2,6 +2,7 @@ import type { Intent, IntentKind, IntentProposal, Tick, WorldState } from '../co
 import { INTENT_KINDS } from '../core/types.js'
 import { accessItems, isLocation, locationDef } from '../world/locations.js'
 import { isAgent } from '../world/cast.js'
+import { isFact } from '../world/facts.js'
 
 export const MAX_ACTIVE_INTENTS = 4
 export const MAX_INTENT_HORIZON = 48 // ticks
@@ -59,16 +60,37 @@ export function validateIntent(
     if (state.agents[p.target!]!.asleep) return { ok: false, reason: 'they are asleep' }
   }
 
-  return {
-    ok: true,
-    value: {
-      ...p,
-      weight: Math.max(0, Math.min(1, Number.isFinite(p.weight) ? p.weight : 0.5)),
-      expiresTick: Math.min(p.expiresTick, tick + MAX_INTENT_HORIZON),
-      reason: (p.reason ?? '').slice(0, MAX_REASON_CHARS),
-      say: p.say?.slice(0, MAX_SAY_CHARS),
-    },
+  // A revealed fact must be one the speaker actually knows. An invented or
+  // unknown fact is stripped (the words are still said; nothing is learned).
+  let fact = p.fact
+  if (fact !== undefined && (!isFact(fact) || !state.knowledge[p.agentId]?.[fact])) fact = undefined
+  if (p.kind !== 'speak' && p.kind !== 'confide') fact = undefined
+
+  const value: IntentProposal = {
+    ...p,
+    weight: Math.max(0, Math.min(1, Number.isFinite(p.weight) ? p.weight : 0.5)),
+    expiresTick: Math.min(p.expiresTick, tick + MAX_INTENT_HORIZON),
+    reason: (p.reason ?? '').slice(0, MAX_REASON_CHARS),
   }
+  if (p.say !== undefined) value.say = p.say.slice(0, MAX_SAY_CHARS)
+  if (fact !== undefined) value.fact = fact
+  else delete value.fact
+  return { ok: true, value }
+}
+
+/** Intents that contradict each other when aimed at the same person. */
+const OPPOSES: Partial<Record<IntentKind, readonly IntentKind[]>> = {
+  avoid: ['seek', 'speak', 'confide', 'confront', 'ally'],
+  seek: ['avoid'],
+  speak: ['avoid'],
+  confide: ['avoid', 'withhold'],
+  confront: ['avoid', 'ally'],
+  ally: ['avoid', 'confront'],
+  withhold: ['confide'],
+}
+
+function opposes(a: IntentProposal, b: IntentProposal): boolean {
+  return a.agentId === b.agentId && a.target !== undefined && a.target === b.target && !!OPPOSES[a.kind]?.includes(b.kind)
 }
 
 const sameAim = (a: IntentProposal, b: IntentProposal) =>
@@ -109,7 +131,22 @@ export function applyIntents(state: WorldState, submissions: readonly Intent[], 
       rejected.push({ ...sub, status: 'rejected', appliedTick: tick, rejectReason: v.reason })
       continue
     }
-    const intent: Intent = { ...sub, ...v.value, status: 'committed', appliedTick: tick }
+    const intent: Intent = { ...v.value, id: sub.id, createdTick: sub.createdTick, status: 'committed', appliedTick: tick }
+
+    // Habit never overrules a decision: an instinct that contradicts an active
+    // agent intent is dropped. Otherwise the newer decision wins.
+    const contrary = state.intents.filter((i) => opposes(intent, i))
+    if (intent.source === 'instinct' && contrary.some((i) => i.source !== 'instinct')) {
+      rejected.push({ ...intent, status: 'rejected', rejectReason: 'overruled by your own decision' })
+      continue
+    }
+    if (contrary.length) {
+      state.intents = state.intents.filter((i) => {
+        if (!opposes(intent, i)) return true
+        retired.push({ ...i, status: 'expired', rejectReason: 'changed your mind' })
+        return false
+      })
+    }
 
     // A new intent with the same aim replaces the old one.
     state.intents = state.intents.filter((i) => {

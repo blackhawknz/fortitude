@@ -61,6 +61,7 @@ export interface ConditionDef {
 export interface CastMember {
   id: AgentId
   name: string
+  pronouns: 'she/her' | 'he/him' | 'they/them'
   role: string
   backend: AgentBackendKind
   priority: Priority
@@ -108,6 +109,7 @@ export const CAST: readonly CastMember[] = [
   {
     id: 'alita',
     name: 'Alita',
+    pronouns: 'she/her',
     role: 'Queen of Fortitude',
     backend: 'alita',
     priority: 'queen',
@@ -129,7 +131,10 @@ export const CAST: readonly CastMember[] = [
       { from: 20, to: 1, at: [['throne-ring', 3], ['long-bar', 2]], activity: 'Keeping late hours' },
     ],
     goal: { id: 'g-hold', text: 'Hold the station together', weight: 1, kind: 'maintain', subsystem: 'morale' },
-    secret: { text: 'The crack is worse than she has said.', fact: 'f-crack' },
+    secret: {
+      text: 'The crack is worse than she has said. The hull figure on the morning board is hers: she has been posting it higher than the truth, to keep the ring calm while she works out what to do. Nobody else knows the real number — except perhaps the Spine engineer, who reads the same instruments.',
+      fact: 'f-crack',
+    },
     manages: { agentId: '*', text: 'All of them.' },
     unspoken: 'To not do this alone.',
     goals: [{ id: 'g-hull', text: 'Slow the crack', weight: 0.8, kind: 'maintain', subsystem: 'hull' }],
@@ -144,6 +149,7 @@ export const CAST: readonly CastMember[] = [
   {
     id: 'sera',
     name: 'Sera Okonkwo',
+    pronouns: 'she/her',
     role: 'First Hand to the Queen',
     backend: 'local',
     priority: 'major',
@@ -180,6 +186,7 @@ export const CAST: readonly CastMember[] = [
   {
     id: 'cassian',
     name: 'Cassian Vey',
+    pronouns: 'he/him',
     role: 'Court Advisor',
     backend: 'local',
     priority: 'major',
@@ -216,6 +223,7 @@ export const CAST: readonly CastMember[] = [
   {
     id: 'mira',
     name: 'Mira',
+    pronouns: 'she/her',
     role: 'Hydroponics Lead',
     backend: 'local',
     priority: 'major',
@@ -252,6 +260,7 @@ export const CAST: readonly CastMember[] = [
   {
     id: 'ines',
     name: 'Inés',
+    pronouns: 'she/her',
     role: 'Archivist',
     backend: 'local',
     priority: 'major',
@@ -285,6 +294,7 @@ export const CAST: readonly CastMember[] = [
   {
     id: 'tomas',
     name: 'Tomas',
+    pronouns: 'he/him',
     role: 'Spine Engineer',
     backend: 'local',
     priority: 'major',
@@ -321,6 +331,7 @@ export const CAST: readonly CastMember[] = [
   {
     id: 'olen',
     name: 'Olen',
+    pronouns: 'he/him',
     role: 'Dirtsider Fixer',
     backend: 'local',
     priority: 'minor',
@@ -351,6 +362,7 @@ export const CAST: readonly CastMember[] = [
   {
     id: 'juno',
     name: 'Juno',
+    pronouns: 'she/her',
     role: 'Keeper of the Quiet Chapel',
     backend: 'local',
     priority: 'minor',
@@ -379,6 +391,7 @@ export const CAST: readonly CastMember[] = [
   {
     id: 'kavi',
     name: 'Kavi',
+    pronouns: 'he/him',
     role: 'Medic',
     backend: 'local',
     priority: 'major',
@@ -413,6 +426,7 @@ export const CAST: readonly CastMember[] = [
   {
     id: 'nadia',
     name: 'Nadia',
+    pronouns: 'she/her',
     role: 'Turning Market Trader',
     backend: 'local',
     priority: 'minor',
@@ -443,6 +457,7 @@ export const CAST: readonly CastMember[] = [
   {
     id: 'bex',
     name: 'Bex',
+    pronouns: 'he/him',
     role: 'Owner of the Long Bar',
     backend: 'local',
     priority: 'minor',

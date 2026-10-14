@@ -1,6 +1,10 @@
-import type { Intent, SimEvent, WorldState } from '../core/types.js'
+import type { Intent, IntentKind, SimEvent, WorldState } from '../core/types.js'
 import { castMember, isAgent } from '../world/cast.js'
 import { isLocation, locationDef } from '../world/locations.js'
+import { factDef } from '../world/facts.js'
+import { chance } from '../core/rng.js'
+import { learn } from './knowledge.js'
+import { fulfil } from './intents.js'
 import { TickContext, type SimMemory } from './context.js'
 import { resolveEncounters } from './encounters.js'
 import { updateGoals } from './goals.js'
@@ -15,7 +19,7 @@ import { cloneState } from './state.js'
  * Bump whenever a change to src/sim or src/world would alter outcomes.
  * Replay is only meaningful against the same version; it is stamped on each world.
  */
-export const SIM_VERSION = 1
+export const SIM_VERSION = 2
 
 export interface TickResult {
   state: WorldState
@@ -62,23 +66,70 @@ export function advanceTick(prev: WorldState, submissions: readonly Intent[]): T
 
   // Speech is generative content riding on an adjudicated intent. It is
   // recorded, it can wake the listener, but it changes nothing by itself.
+  // If the speaker chose to reveal a fact, that part IS adjudicated: the
+  // listener learns it; said openly, everyone present does; said quietly,
+  // bystanders may overhear.
+  const holds: Intent[] = []
   for (const i of phase2.committed) {
     if (i.kind !== 'speak' || !i.say || !i.target) continue
-    const locationId = state.agents[i.agentId]!.locationId
+    const speaker = i.agentId
+    const listener = i.target
+    const locationId = state.agents[speaker]!.locationId
     const present = Object.values(state.agents)
       .filter((a) => a.alive && !a.asleep && a.locationId === locationId)
       .map((a) => a.id)
       .sort()
-    ctx.emit({
+    const bystanders = present.filter((p) => p !== speaker && p !== listener)
+    const heard: string[] = []
+    if (i.fact) {
+      const quiet = i.register === 'guarded' || i.register === 'warm'
+      learn(state, listener, i.fact, { kind: 'told', by: speaker, tick, confided: quiet }, tick)
+      for (const b of bystanders) {
+        const p = quiet ? 0.02 + (castMember(b).traits.perception / 100) * 0.16 : 0.9
+        if (!chance(p, state.seed, tick, i.id, b, 'overhear-speech')) continue
+        heard.push(b)
+        learn(state, b, i.fact, { kind: 'overheard', from: speaker, tick }, tick)
+      }
+      fulfilAll(state, speaker, listener, ['confide'], ctx.intentChanges)
+    }
+    const quietly = i.register === 'guarded' || i.register === 'warm'
+    const ev = ctx.emit({
       type: 'speech',
-      actorId: i.agentId,
-      targetId: i.target,
+      actorId: speaker,
+      targetId: listener,
       locationId,
-      text: `${castMember(i.agentId).name} to ${castMember(i.target).name}: “${i.say}”`,
-      magnitude: 0.5,
-      privateTo: [...new Set([i.agentId, i.target, ...present])].sort(),
-      data: { intent: i.id, register: i.register, say: i.say },
+      text: `${castMember(speaker).name} to ${castMember(listener).name}: “${i.say}”`,
+      magnitude: i.fact ? 0.7 : 0.5,
+      // A quiet word is heard by the listener and whoever overheard; an open one by the room.
+      privateTo: [...new Set([speaker, listener, ...(quietly ? heard : present)])].sort(),
+      data: { intent: i.id, register: i.register, say: i.say, fact: i.fact, overheard: heard },
     })
+    if (i.fact) {
+      ctx.remember(listener, `${castMember(speaker).name} told me: “${factDef(i.fact).text}”`, 4, ev.id)
+      for (const b of heard) ctx.remember(b, `Overheard ${castMember(speaker).name} telling ${castMember(listener).name}: “${factDef(i.fact).text}”`, 4, ev.id)
+    }
+    // Conversation hold: people who've just been spoken to linger a moment to answer —
+    // unless they're set on avoiding the speaker.
+    for (const [who, other] of [[listener, speaker], [speaker, listener]] as const) {
+      if (state.intents.some((x) => x.agentId === who && x.kind === 'avoid' && x.target === other)) continue
+      holds.push({
+        id: `c${tick}.${who}.${holds.length}`,
+        agentId: who,
+        kind: 'seek',
+        target: other,
+        reason: 'In the middle of a conversation.',
+        weight: 0.6,
+        expiresTick: tick + 2,
+        source: 'instinct',
+        createdTick: tick,
+        status: 'pending',
+        appliedTick: null,
+      })
+    }
+  }
+  if (holds.length) {
+    const r = applyIntents(state, holds, tick)
+    ctx.intentChanges.push(...r.committed, ...r.rejected, ...r.retired)
   }
 
   // PHASE 3 — where is everyone
@@ -97,6 +148,10 @@ export function advanceTick(prev: WorldState, submissions: readonly Intent[]): T
 
 function safeName(id: string): string {
   return isLocation(id) ? locationDef(id).name : `“${String(id).slice(0, 40)}”`
+}
+
+function fulfilAll(state: WorldState, agentId: string, target: string, kinds: IntentKind[], out: Intent[]): void {
+  for (const i of [...state.intents]) if (i.agentId === agentId && i.target === target && kinds.includes(i.kind)) fulfil(state, i.id, out)
 }
 
 function safeAgent(id: string): string {

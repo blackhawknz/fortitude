@@ -53,13 +53,49 @@ Running `npm run sim -- --days 30` across several seeds produces, with nobody wa
 
 Still thin: Alita's journal (needs the Phase 2 reflection pass), and "strangers who now avoid each other" (everyone starts out knowing everyone; there are no strangers aboard).
 
+## Phase 1–2 (real model: DeepSeek `deepseek-chat`)
+
+**Tick rate: 60 s default.** One in-world day = 24 real minutes. Measured cost for the whole cast is ~35 LLM calls per in-world day: ~25 trigger-driven turns plus one reflection per agent. That works out to:
+- turn: ~4.5k prompt + ~360 completion tokens, ~3 s
+- reflection: ~2.7k prompt + ~1k completion tokens, ~6 s
+
+At 60 s that's ~90 calls per real hour (≈ $0.15–0.20/h on DeepSeek, ~$4/day running nonstop), well under the 300/h ceiling. Daily reflection for everyone is affordable at this speed, which settles the reflection-cadence question. `--tick-ms 10000` is available for watching. Hull decay was slowed to 0.12/day, so the station's arc spans real days rather than hours.
+
+**Speech is a real act.** Phase 1 exposed a gap. Sera said "I held the lamp while you opened the seal" aloud; the listener's LLM would know it, but the sim's knowledge model wouldn't. Fix: dialogue carries an optional `reveals: <fact id>`, and `confide` intents an optional `fact`. The sim adjudicates both (the speaker must know the fact; otherwise it's stripped and nothing is learned). The listener learns it. If said openly, the room hears; if said low, bystanders may overhear. Characters can still say things without `reveals`; the sim then treats it as talk, not a transfer.
+
+**Decisions beat habits.** Instincts that contradict an active agent intent toward the same person (e.g. Tomas's authored urge to avoid Sera vs. his decision to find her) are rejected. Between two decisions, the newer one retires the older ("changed your mind").
+
+**Conversation hold.** Being spoken to makes both people linger a tick (an instinct `seek`), unless they're avoiding the speaker. Without it, routine schedules walked listeners out mid-conversation, and the Queen's big reveal to Sera failed with "they are not here".
+
+**Reflection** (`src/agents/reflection.ts`). Once per in-world day, the hour before each character sleeps. Outputs:
+- the agent's own goals (max 3; authored goals can only be annotated)
+- opinions of others (semantic tier, one per person, shown as `your_view`)
+- beliefs and a day summary
+- forget/keep over the memories it was shown, and nothing else
+- a private journal
+
+Opinions do **not** change the sim's relationship numbers: they're the agent's reading, and can be wrong. Agent-authored goals live in `agent_goals` with `origin='agent'` and are never loaded into `WorldState`.
+
+**Memory tiers.**
+- *Working:* the packet.
+- *Episodic:* capped at 200 per agent, scored by recency + importance × 3 days; reflection's forget/keep act on it.
+- *Semantic:* capped at 50: all opinions, the last 14 summaries, and beliefs by weight.
+
+**Fixes found by the real runs:**
+- agent-authored goal ids were rejected in later turns
+- a 1-hour intent expired before it could be applied
+- models put `speak` in intents as well as dialogue, which caused repeats; it's now dropped with a violation
+- Alita misread the board gap as someone else's lie; her secret now says plainly that the board figure is hers
+- pronouns are now in the cast
+- reflections are labelled with the day just ended, even when written after midnight
+
 ## Open questions carried forward
 
-1. Tick speed default (affects budget arithmetic).
+1. ~~Tick speed default~~ — 60 s (see above).
 2. Player: 12th slot or 13th.
 3. Romance (implemented, off by default).
 4. Death (implemented behind `settings.death`, off by default; breaches injure).
 5. Ending: hull decay is a setting (`hullDecayPerDay`, default 0.35 → ~180 in-world days to zero from 64).
 6. Teaser emails.
 7. Player starting knowledge.
-8. **New:** reflection cadence vs. budget (see correction 1).
+8. ~~Reflection cadence vs. budget~~: daily is affordable at 60 s ticks; revisit if the default speed rises.

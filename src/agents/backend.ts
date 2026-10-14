@@ -2,6 +2,7 @@ import OpenAI from 'openai'
 import type { ContextPacket } from './packet.js'
 import { extractJson } from './response.js'
 import { repairPrompt, systemPrompt, userPrompt } from './prompt.js'
+import { reflectionSystemPrompt, reflectionUserPrompt, type ReflectionPacket } from './reflection.js'
 
 /** What a backend returns: the raw parsed JSON plus accounting. Validation happens in the runtime. */
 export interface BackendReply {
@@ -16,6 +17,7 @@ export interface BackendReply {
 export interface AgentBackend {
   readonly name: string
   turn(packet: ContextPacket, signal?: AbortSignal): Promise<BackendReply>
+  reflect(packet: ReflectionPacket, signal?: AbortSignal): Promise<BackendReply>
 }
 
 export interface LocalBackendOptions {
@@ -53,10 +55,18 @@ export class LocalBackend implements AgentBackend {
     this.name = `local:${opts.model}`
   }
 
-  async turn(packet: ContextPacket, signal?: AbortSignal): Promise<BackendReply> {
+  turn(packet: ContextPacket, signal?: AbortSignal): Promise<BackendReply> {
+    return this.complete(systemPrompt(packet), userPrompt(packet), this.opts.maxTokens ?? 700, signal)
+  }
+
+  reflect(packet: ReflectionPacket, signal?: AbortSignal): Promise<BackendReply> {
+    return this.complete(reflectionSystemPrompt(packet), reflectionUserPrompt(packet), 2200, signal)
+  }
+
+  private async complete(system: string, user: string, maxTokens: number, signal?: AbortSignal): Promise<BackendReply> {
     const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
-      { role: 'system', content: systemPrompt(packet) },
-      { role: 'user', content: userPrompt(packet) },
+      { role: 'system', content: system },
+      { role: 'user', content: user },
     ]
     let promptTokens = 0
     let completionTokens = 0
@@ -66,7 +76,7 @@ export class LocalBackend implements AgentBackend {
           model: this.opts.model,
           messages,
           temperature: this.opts.temperature ?? 0.8,
-          max_tokens: this.opts.maxTokens ?? 700,
+          max_tokens: maxTokens,
           ...(this.opts.jsonMode !== false ? { response_format: { type: 'json_object' as const } } : {}),
         },
         { signal },
@@ -93,9 +103,11 @@ export class LocalBackend implements AgentBackend {
 export class MockBackend implements AgentBackend {
   readonly name = 'mock'
   calls: ContextPacket[] = []
+  reflections: ReflectionPacket[] = []
   constructor(
     private readonly script: (p: ContextPacket) => unknown,
     private readonly delayMs = 0,
+    private readonly reflectScript: (p: ReflectionPacket) => unknown = defaultReflection,
   ) {}
 
   async turn(packet: ContextPacket): Promise<BackendReply> {
@@ -103,6 +115,23 @@ export class MockBackend implements AgentBackend {
     if (this.delayMs) await new Promise((r) => setTimeout(r, this.delayMs))
     const json = this.script(packet)
     return { json, raw: JSON.stringify(json), backend: this.name }
+  }
+
+  async reflect(packet: ReflectionPacket): Promise<BackendReply> {
+    this.reflections.push(packet)
+    if (this.delayMs) await new Promise((r) => setTimeout(r, this.delayMs))
+    const json = this.reflectScript(packet)
+    return { json, raw: JSON.stringify(json), backend: this.name }
+  }
+}
+
+/** Mock reflection: summarise, forget the least important memory, write a short journal. */
+export function defaultReflection(p: ReflectionPacket): unknown {
+  const sorted = [...p.todays_memories].sort((a, b) => a.importance - b.importance)
+  return {
+    memory_consolidation: { forget: sorted.slice(0, 1).map((m) => m.id), keep: sorted.slice(-1).map((m) => m.id), summarise: `Day ${p.day}: ${p.todays_events.length} things happened.` },
+    journal: `Day ${p.day}. Another day on the ring.`,
+    opinions: [],
   }
 }
 

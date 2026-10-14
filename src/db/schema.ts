@@ -66,6 +66,9 @@ export const agentGoals = sqliteTable(
     progress: real('progress').notNull().default(0), // sim-owned
     perceivedProgress: real('perceived_progress'), // agent-owned
     note: text('note'), // agent-owned
+    /** 'authored' goals are sim-owned (progress computed by the tick); 'agent' goals are written in reflection. */
+    origin: text('origin').notNull().default('authored'),
+    status: text('status').notNull().default('active'), // 'active' | 'dropped'
     createdTick: integer('created_tick').notNull().default(0),
     resolvedTick: integer('resolved_tick'),
   },

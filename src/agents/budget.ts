@@ -53,13 +53,14 @@ export class BudgetLedger {
     return list
   }
 
-  check(agentId: AgentId, inWorldDay: number, urgency: number): BudgetDecision {
+  /** eflect turns are limited to one per day by the runtime, so they skip the in-world turn budget but count against real-time caps. */
+  check(agentId: AgentId, inWorldDay: number, urgency: number, kind: 'turn' | 'reflect' = 'turn'): BudgetDecision {
     const b = this.budgets[agentId]
     if (!b) return { ok: false, reason: 'agent has no budget' }
     const t = this.now()
     const day = this.perAgentDay.get(agentId)
     const usedToday = day && day.day === inWorldDay ? day.n : 0
-    if (usedToday >= b.turnsPerInWorldDay) return { ok: false, reason: `in-world daily budget spent (${usedToday}/${b.turnsPerInWorldDay})` }
+    if (kind === 'turn' && usedToday >= b.turnsPerInWorldDay) return { ok: false, reason: `in-world daily budget spent (${usedToday}/${b.turnsPerInWorldDay})` }
     const mine = this.prune(this.perAgentReal.get(agentId) ?? [], t)
     if (mine.length >= b.turnsPerRealHour) return { ok: false, reason: `per-agent real-hour cap (${b.turnsPerRealHour})` }
     const g = this.prune(this.global, t)
@@ -70,12 +71,13 @@ export class BudgetLedger {
     return { ok: true }
   }
 
-  spend(agentId: AgentId, inWorldDay: number): void {
+  spend(agentId: AgentId, inWorldDay: number, kind: 'turn' | 'reflect' = 'turn'): void {
     const t = this.now()
     this.global.push(t)
     const mine = this.perAgentReal.get(agentId) ?? []
     mine.push(t)
     this.perAgentReal.set(agentId, mine)
+    if (kind === 'reflect') return
     const day = this.perAgentDay.get(agentId)
     this.perAgentDay.set(agentId, day && day.day === inWorldDay ? { day: inWorldDay, n: day.n + 1 } : { day: inWorldDay, n: 1 })
   }

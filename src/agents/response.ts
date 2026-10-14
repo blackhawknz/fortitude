@@ -24,12 +24,14 @@ const IntentSchema = z.object({
   weight: z.coerce.number().refine(Number.isFinite).default(0.6),
   hours: z.coerce.number().refine(Number.isFinite).optional(),
   expiresTick: z.coerce.number().refine(Number.isFinite).optional(),
+  fact: z.string().trim().min(1).optional().nullable(),
 })
 
 const DialogueSchema = z.object({
   say: z.string().trim().min(1),
   to: z.string().trim().min(1),
   register: z.enum(REGISTERS).default('open'),
+  reveals: z.string().trim().min(1).optional().nullable(),
 })
 
 const MemorySchema = z.object({
@@ -58,7 +60,7 @@ const ALLOWED_KEYS = new Set(['intents', 'dialogue', 'memory_writes', 'mood', 'g
 
 export interface ParsedResponse {
   intents: Omit<IntentProposal, 'agentId' | 'source'>[]
-  dialogue: { say: string; to: string; register: (typeof REGISTERS)[number] } | null
+  dialogue: { say: string; to: string; register: (typeof REGISTERS)[number]; reveals?: string } | null
   memoryWrites: { text: string; importance: number; private: boolean }[]
   mood: Mood | null
   goalUpdates: { id: string; progress?: number; note?: string }[]
@@ -103,6 +105,11 @@ export function parseResponse(raw: unknown, nowTick: Tick, ownGoalIds: readonly 
       violations.push(`intent[${idx}] dropped: ${r.error.issues.map((i) => `${i.path.join('.') || 'value'} ${i.message}`).join('; ')}`)
       return
     }
+    // Speaking happens through `dialogue`, never as a bare intent.
+    if (r.data.kind === 'speak') {
+      violations.push(`intent[${idx}] dropped: speak via "dialogue", not as an intent`)
+      return
+    }
     if (intents.length >= MAX_INTENTS_PER_TURN) {
       violations.push(`intent[${idx}] dropped: at most ${MAX_INTENTS_PER_TURN} intents per turn`)
       return
@@ -117,7 +124,9 @@ export function parseResponse(raw: unknown, nowTick: Tick, ownGoalIds: readonly 
       to: v.to ?? undefined,
       reason: v.reason.slice(0, 200),
       weight: Math.max(0, Math.min(1, v.weight)),
-      expiresTick: nowTick + clampedHours,
+      // +1: the intent is adjudicated next tick, and should then stand for `hours`.
+      expiresTick: nowTick + 1 + clampedHours,
+      ...(v.fact ? { fact: v.fact } : {}),
     })
   })
 
@@ -125,7 +134,8 @@ export function parseResponse(raw: unknown, nowTick: Tick, ownGoalIds: readonly 
   if (e.dialogue) {
     const r = DialogueSchema.safeParse(e.dialogue)
     if (r.success) {
-      dialogue = { ...r.data, say: r.data.say.slice(0, MAX_SAY_CHARS) }
+      const { reveals, ...rest } = r.data
+      dialogue = { ...rest, say: r.data.say.slice(0, MAX_SAY_CHARS), ...(reveals ? { reveals } : {}) }
       if (r.data.say.length > MAX_SAY_CHARS) violations.push(`dialogue truncated to ${MAX_SAY_CHARS} chars`)
     } else violations.push('dialogue dropped: ' + r.error.issues.map((i) => `${i.path.join('.')} ${i.message}`).join('; '))
   }

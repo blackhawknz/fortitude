@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { AgentId, IntentProposal, WorldState } from '../core/types.js'
 import { timeOf } from '../core/clock.js'
-import { castMember } from '../world/cast.js'
+import { CAST, castMember } from '../world/cast.js'
 import type { TickResult } from '../sim/tick.js'
 import type { TickListener } from '../engine/engine.js'
 import type { WorldStore } from '../db/store.js'
@@ -10,6 +10,7 @@ import { BudgetLedger, DEFAULT_BUDGETS, DEFAULT_GLOBAL_PER_REAL_HOUR, type Agent
 import { buildContextPacket, type Trigger } from './packet.js'
 import { parseResponse, type ParsedResponse } from './response.js'
 import { coalesce, deriveTriggers } from './triggers.js'
+import { applyReflection, buildReflectionPacket, parseReflection, reflectionDay, reflectionHour, type EdgeSnapshot, type ParsedReflection } from './reflection.js'
 
 export interface RuntimeOptions {
   store: WorldStore
@@ -22,6 +23,8 @@ export interface RuntimeOptions {
   globalPerRealHour?: number
   concurrency?: number
   turnTimeoutMs?: number
+  /** Daily reflection pass (default on). */
+  reflection?: boolean
   onTurn?: (t: TurnRecord) => void
   /** Injected for tests. */
   now?: () => number
@@ -30,6 +33,9 @@ export interface RuntimeOptions {
 
 export interface TurnRecord {
   agentId: AgentId
+  kind: 'turn' | 'reflect'
+  reflection?: ParsedReflection
+  notes?: string[]
   trigger: Trigger
   status: 'ok' | 'invalid' | 'error' | 'timeout' | 'skipped'
   tickAsked: number
@@ -46,6 +52,7 @@ export interface RuntimeStats {
   invalid: number
   errors: number
   skippedBudget: number
+  reflections: number
   coalesced: number
   violations: number
 }
@@ -57,9 +64,14 @@ export interface RuntimeStats {
  */
 export class AgentRuntime implements TickListener {
   readonly ledger: BudgetLedger
-  readonly stats: RuntimeStats = { turns: 0, ok: 0, invalid: 0, errors: 0, skippedBudget: 0, coalesced: 0, violations: 0 }
+  readonly stats: RuntimeStats = { turns: 0, ok: 0, invalid: 0, errors: 0, skippedBudget: 0, reflections: 0, coalesced: 0, violations: 0 }
   private inFlight = new Set<AgentId>()
   private pending = new Map<AgentId, Trigger>()
+  private pendingReflect = new Set<AgentId>()
+  private reflectedDay = new Map<AgentId, number>()
+  private lastReflectTick = new Map<AgentId, number>()
+  private snapshots = new Map<AgentId, Record<AgentId, EdgeSnapshot>>()
+  private readonly reflection: boolean
   private queue: (() => void)[] = []
   private active = 0
   private idleWaiters: (() => void)[] = []
@@ -75,6 +87,7 @@ export class AgentRuntime implements TickListener {
     this.ledger = new BudgetLedger(budgets, opts.globalPerRealHour ?? DEFAULT_GLOBAL_PER_REAL_HOUR, opts.now)
     this.concurrency = opts.concurrency ?? 2
     this.timeoutMs = opts.turnTimeoutMs ?? 60_000
+    this.reflection = opts.reflection ?? true
   }
 
   get enabledAgents(): AgentId[] {
@@ -83,7 +96,16 @@ export class AgentRuntime implements TickListener {
 
   /** PHASE 7. Never awaits; never throws into the engine. */
   onTick(result: TickResult): void {
+    const { hour } = timeOf(result.state.tick)
+    const day = reflectionDay(result.state.tick)
     for (const agentId of this.enabledAgents) {
+      // Once a day, the hour before sleep: reflection.
+      if (this.reflection && hour === reflectionHour(agentId) && this.reflectedDay.get(agentId) !== day && result.state.agents[agentId]!.alive) {
+        this.reflectedDay.set(agentId, day)
+        if (this.inFlight.has(agentId)) this.pendingReflect.add(agentId)
+        else this.startReflection(agentId)
+        continue
+      }
       const trigger = coalesce(deriveTriggers(agentId, result.state, result.events, this.opts.driftRoll?.() ?? Math.random()))
       if (!trigger) continue
       if (this.inFlight.has(agentId)) {
@@ -102,20 +124,108 @@ export class AgentRuntime implements TickListener {
     const decision = this.ledger.check(agentId, day, trigger.urgency)
     if (!decision.ok) {
       this.stats.skippedBudget++
-      this.opts.onTurn?.({ agentId, trigger, status: 'skipped', tickAsked: trigger.tick, tickAnswered: trigger.tick, submittedIntentIds: [], error: decision.reason, latencyMs: 0 })
+      this.opts.onTurn?.({ agentId, kind: 'turn', trigger, status: 'skipped', tickAsked: trigger.tick, tickAnswered: trigger.tick, submittedIntentIds: [], error: decision.reason, latencyMs: 0 })
       return
     }
     this.ledger.spend(agentId, day)
     this.inFlight.add(agentId)
-    this.schedule(() =>
-      this.turn(agentId, trigger).finally(() => {
-        this.inFlight.delete(agentId)
-        const next = this.pending.get(agentId)
-        this.pending.delete(agentId)
-        if (next) this.wake(agentId, next)
-        this.checkIdle()
-      }),
-    )
+    this.schedule(() => this.turn(agentId, trigger).finally(() => this.afterJob(agentId)))
+  }
+
+  /** When an agent finishes thinking: a waiting reflection first, then the most urgent waiting trigger. */
+  private afterJob(agentId: AgentId): void {
+    this.inFlight.delete(agentId)
+    if (this.pendingReflect.delete(agentId)) {
+      this.startReflection(agentId)
+    } else {
+      const next = this.pending.get(agentId)
+      this.pending.delete(agentId)
+      if (next) this.wake(agentId, next)
+    }
+    this.checkIdle()
+  }
+
+  private startReflection(agentId: AgentId): void {
+    const day = timeOf(this.opts.getState().tick).day
+    const decision = this.ledger.check(agentId, day, 0.6, 'reflect')
+    if (!decision.ok) {
+      this.stats.skippedBudget++
+      return
+    }
+    this.ledger.spend(agentId, day, 'reflect')
+    this.inFlight.add(agentId)
+    this.schedule(() => this.reflect(agentId).finally(() => this.afterJob(agentId)))
+  }
+
+  /** Run a backend call with a hard timeout the backend can't ignore. */
+  private withTimeout<T>(fn: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    const ac = new AbortController()
+    let timer: NodeJS.Timeout | undefined
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        ac.abort()
+        reject(Object.assign(new Error(`turn exceeded ${this.timeoutMs} ms`), { name: 'TimeoutError' }))
+      }, this.timeoutMs)
+    })
+    return Promise.race([fn(ac.signal), timeout]).finally(() => clearTimeout(timer))
+  }
+
+  private async reflect(agentId: AgentId): Promise<void> {
+    const { store, worldId } = this.opts
+    const backend = this.opts.agents[agentId]!
+    const state = this.opts.getState()
+    const since = this.lastReflectTick.get(agentId) ?? store.lastReflectTick(worldId, agentId) ?? 0
+    const packet = buildReflectionPacket(store, state, agentId, since, this.snapshots.get(agentId) ?? null)
+    const started = Date.now()
+    const trigger: Trigger = { kind: 'routine_check', detail: `End of Day ${packet.day}: reflection`, urgency: 0.6, tick: state.tick }
+    const record: TurnRecord = { agentId, kind: 'reflect', trigger, status: 'error', tickAsked: state.tick, tickAnswered: state.tick, submittedIntentIds: [], latencyMs: 0 }
+    let raw: string | null = null
+    let tokens: { p?: number; c?: number } = {}
+    this.stats.reflections++
+    try {
+      const reply = await this.withTimeout((signal) => backend.reflect(packet, signal))
+      raw = reply.raw
+      tokens = { p: reply.promptTokens, c: reply.completionTokens }
+      const parsed = parseReflection(reply.json, packet, agentId)
+      const now = this.opts.getState()
+      record.tickAnswered = now.tick
+      record.reflection = parsed
+      record.notes = applyReflection(store, worldId, agentId, parsed, now.tick, packet.day)
+      record.status = 'ok'
+      this.lastReflectTick.set(agentId, state.tick)
+      this.snapshots.set(agentId, Object.fromEntries(this.enabledAgentsAll().filter((o) => o !== agentId).map((o) => {
+        const e = state.edges[`${agentId}>${o}`]!
+        return [o, { trust: e.trust, warmth: e.warmth, tension: e.tension }]
+      })))
+      this.stats.violations += parsed.violations.length
+    } catch (err) {
+      const e = err as Error & { raw?: string }
+      raw ??= e.raw ?? null
+      record.error = e.message
+      record.status = e.name === 'TimeoutError' ? 'timeout' : /response|JSON|envelope|unparseable/i.test(e.message) ? 'invalid' : 'error'
+      this.stats.errors++
+    }
+    record.latencyMs = Date.now() - started
+    store.logTurn({
+      worldId,
+      agentId,
+      tick: record.tickAsked,
+      kind: 'reflect',
+      backend: backend.name,
+      triggerJson: JSON.stringify(trigger),
+      packetJson: JSON.stringify(packet),
+      responseJson: raw,
+      status: record.status,
+      error: record.error ?? (record.reflection?.violations.length ? 'violations: ' + record.reflection.violations.join(' | ') : null),
+      latencyMs: record.latencyMs,
+      promptTokens: tokens.p ?? null,
+      completionTokens: tokens.c ?? null,
+    })
+    this.opts.onTurn?.(record)
+  }
+
+  private enabledAgentsAll(): AgentId[] {
+    return CAST.map((c) => c.id)
   }
 
   private schedule(job: () => Promise<void>): void {
@@ -151,28 +261,20 @@ export class AgentRuntime implements TickListener {
     const asked = this.opts.getState()
     const started = Date.now()
     const packet = buildContextPacket(store, asked, agentId, trigger)
-    const record: TurnRecord = { agentId, trigger, status: 'error', tickAsked: asked.tick, tickAnswered: asked.tick, submittedIntentIds: [], latencyMs: 0 }
+    const record: TurnRecord = { agentId, kind: 'turn', trigger, status: 'error', tickAsked: asked.tick, tickAnswered: asked.tick, submittedIntentIds: [], latencyMs: 0 }
     let raw: string | null = null
     let tokens: { p?: number; c?: number } = {}
     this.stats.turns++
 
     try {
       // Enforce the timeout ourselves: a backend that ignores the signal must not hold a turn slot forever.
-      const ac = new AbortController()
-      let timer: NodeJS.Timeout | undefined
-      const timeout = new Promise<never>((_, reject) => {
-        timer = setTimeout(() => {
-          ac.abort()
-          reject(Object.assign(new Error(`turn exceeded ${this.timeoutMs} ms`), { name: 'TimeoutError' }))
-        }, this.timeoutMs)
-      })
-      const reply = await Promise.race([backend.turn(packet, ac.signal), timeout]).finally(() => clearTimeout(timer))
+      const reply = await this.withTimeout((signal) => backend.turn(packet, signal))
       raw = reply.raw
       tokens = { p: reply.promptTokens, c: reply.completionTokens }
       // The world moved on while they were thinking. Their intents start from NOW.
       const now = this.opts.getState()
       record.tickAnswered = now.tick
-      const goalIds = now.agents[agentId]!.goals.map((g) => g.id)
+      const goalIds = store.agentGoals(worldId, agentId).map((g) => g.id)
       const parsed = parseResponse(reply.json, now.tick, goalIds)
       record.parsed = parsed
       record.submittedIntentIds = this.apply(agentId, parsed, now.tick)
@@ -221,11 +323,24 @@ export class AgentRuntime implements TickListener {
     }
     for (const i of r.intents) submit(i)
     if (r.dialogue) {
-      submit({ kind: 'speak', target: r.dialogue.to, say: r.dialogue.say, register: r.dialogue.register, reason: 'said aloud', weight: 0.8, expiresTick: tick + 2 })
+      submit({
+        kind: 'speak',
+        target: r.dialogue.to,
+        say: r.dialogue.say,
+        register: r.dialogue.register,
+        reason: 'said aloud',
+        weight: 0.8,
+        expiresTick: tick + 3,
+        ...(r.dialogue.reveals ? { fact: r.dialogue.reveals } : {}),
+      })
     }
     for (const m of r.memoryWrites) store.addAgentMemory(worldId, agentId, tick, m.text, m.importance, m.private)
     if (r.mood) store.setAgentMood(worldId, agentId, r.mood)
-    for (const g of r.goalUpdates) store.setGoalBelief(worldId, agentId, g.id, g.progress, g.note)
+    for (const g of r.goalUpdates) {
+      const own = store.agentGoals(worldId, agentId).find((x) => x.id === g.id)
+      if (own?.origin === 'agent') store.upsertAgentGoal(worldId, agentId, { id: g.id, text: own.text, weight: own.weight, status: 'active', note: g.note ?? own.note ?? undefined, perceived: g.progress }, tick)
+      else store.setGoalBelief(worldId, agentId, g.id, g.progress, g.note)
+    }
     return ids
   }
 }

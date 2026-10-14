@@ -8,9 +8,11 @@
     "node": ">=22"
   },
   "scripts": {
+    "start": "tsx src/cli/serve.ts",
     "sim": "tsx src/cli/sim.ts",
     "agent": "tsx src/cli/agent.ts",
     "replay": "tsx src/cli/replay.ts",
+    "turns": "tsx src/cli/turns.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",

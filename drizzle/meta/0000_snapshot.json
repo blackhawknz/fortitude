@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "80cabb5c-e50e-47e7-8711-7d790a03f2fa",
+  "id": "cd96a175-5663-4bfc-99f5-de72314acb10",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "agent_goals": {
@@ -63,6 +63,22 @@
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
+        },
+        "origin": {
+          "name": "origin",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'authored'"
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'active'"
         },
         "created_tick": {
           "name": "created_tick",
