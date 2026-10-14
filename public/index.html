@@ -52,6 +52,8 @@
   #away .item .w { font-size:11px; color:var(--dim); text-transform:uppercase; letter-spacing:.08em; }
   .entry.new .w::before { content:"new · "; color:var(--accent); }
   #bell { cursor:pointer; } #bell b { color:var(--accent); }
+  .pending { margin-top:12px; padding:8px 10px; border:1px dashed var(--accent); border-radius:6px; color:#e8dcc3; font-size:13px; }
+  .pending .muted { font-size:12px; }
 </style>
 </head>
 <body>
@@ -78,12 +80,17 @@
     <p class="desc" id="pdesc"></p>
     <h2>Here</h2>
     <div id="here"><p class="muted">No one.</p></div>
+    <div id="pending" class="pending" hidden></div>
     <h2>Do</h2>
     <div class="row">
       <button data-act="investigate">Search this place</button>
       <button data-act="work">Work</button>
       <button data-act="rest">Rest</button>
       <button id="observeBtn" disabled>Watch them</button>
+    </div>
+    <div class="row" style="margin-top:6px">
+      <button id="waitBtn" title="Don't wait for the clock: let the next hour happen now">⏩ Let an hour pass</button>
+      <span class="muted" id="clock" style="align-self:center; font-size:12px"></span>
     </div>
     <h2>Go</h2>
     <div class="places" id="places"></div>
@@ -135,6 +142,10 @@ function render() {
         <div class="a">${p.asleep ? 'asleep' : esc(p.activity)}</div></div>`).join('')
     : '<p class="muted">No one.</p>'
   $('places').innerHTML = v.places.filter((p) => p.open).map((p) => `<button class="${p.here ? 'here' : ''}" data-go="${p.id}" ${p.here ? 'disabled' : ''}>${esc(p.name.replace(/^The /, ''))}</button>`).join('')
+  nextTickAt = Date.now() + (v.world.nextTickInMs ?? 0)
+  $('pending').hidden = !v.pending?.length
+  $('pending').innerHTML = (v.pending ?? []).map((p) => `<div>${esc(p.label)}…</div>`).join('') + (v.pending?.length ? `<div class="muted" id="eta"></div>` : '')
+  tickClock()
   $('intents').innerHTML = v.intents.length ? v.intents.map((i) => `<div>${esc(i.kind)} ${esc(i.target ?? i.to ?? '')} <span class="muted">until ${esc(i.until)}</span></div>`).join('') : 'Nothing in particular.'
   $('reveals').innerHTML = '<option value="">— tell them nothing in particular —</option>' + v.knows.map((k) => `<option value="${k.id}">Tell: ${esc(k.text)}</option>`).join('')
   $('knows').innerHTML = v.knows.length ? v.knows.map((k) => `<div class="fact">${esc(k.text)}<div class="h">${esc(k.how)}</div></div>`).join('') : '<p class="muted">Nothing worth repeating. Yet.</p>'
@@ -213,7 +224,33 @@ async function send() {
   $('reveals').value = ''; $('send').disabled = false
 }
 
-async function act(body) { const r = await api('/api/act', body); toast(r.ok ? `You'll ${body.kind}${body.to ? ' → ' + body.to : ''}${body.target ? ' ' + body.target : ''} (${r.appliesAt}).` : r.error) }
+// Countdown to the next hour: actions happen then (the world ticks while you walk).
+let nextTickAt = 0
+function tickClock() {
+  if (!view) return
+  const s = Math.max(0, Math.ceil((nextTickAt - Date.now()) / 1000))
+  const next = `${String((view.world.hour + 1) % 24).padStart(2, '0')}:00`
+  $('clock').textContent = view.world.nextTickInMs ? `${next} in ${s}s` : ''
+  const eta = document.getElementById('eta')
+  if (eta) eta.textContent = s > 0 ? `at ${next} — ${s}s, or let an hour pass` : 'any moment now…'
+}
+setInterval(tickClock, 1000)
+
+async function act(body) {
+  const r = await api('/api/act', body)
+  if (!r.ok) return toast(r.error)
+  view = await api('/api/state') // show it as pending straight away
+  render()
+}
+
+$('waitBtn').onclick = async () => {
+  $('waitBtn').disabled = true
+  const r = await api('/api/wait', {})
+  if (!r.ok) toast(r.error)
+  view = await api('/api/state')
+  render()
+  setTimeout(() => ($('waitBtn').disabled = false), 1500)
+}
 
 document.addEventListener('click', (e) => {
   const t = e.target.closest('[data-id],[data-go],[data-act],[data-tab]')

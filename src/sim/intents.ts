@@ -89,6 +89,9 @@ const OPPOSES: Partial<Record<IntentKind, readonly IntentKind[]>> = {
   withhold: ['confide'],
 }
 
+/** Intents that decide where you are. */
+const PLACE_KINDS: ReadonlySet<IntentKind> = new Set(['move', 'investigate', 'rest', 'work'])
+
 function opposes(a: IntentProposal, b: IntentProposal): boolean {
   return a.agentId === b.agentId && a.target !== undefined && a.target === b.target && !!OPPOSES[a.kind]?.includes(b.kind)
 }
@@ -143,6 +146,16 @@ export function applyIntents(state: WorldState, submissions: readonly Intent[], 
     if (contrary.length) {
       state.intents = state.intents.filter((i) => {
         if (!opposes(intent, i)) return true
+        retired.push({ ...i, status: 'expired', rejectReason: 'changed your mind' })
+        return false
+      })
+    }
+
+    // Where to be: a newer choice of place replaces any older one from the same
+    // decider (you can't head to the Chapel and the Mess at once).
+    if (PLACE_KINDS.has(intent.kind) && intent.source !== 'instinct') {
+      state.intents = state.intents.filter((i) => {
+        if (i.agentId !== intent.agentId || i.source !== intent.source || !PLACE_KINDS.has(i.kind)) return true
         retired.push({ ...i, status: 'expired', rejectReason: 'changed your mind' })
         return false
       })

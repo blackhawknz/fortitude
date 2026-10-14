@@ -62,6 +62,46 @@ describe('the player is a character with a body', () => {
   })
 })
 
+describe('moving (the reported bug)', () => {
+  it('shows the move as pending until the next hour, then you are there — and you stay', () => {
+    const w = setup('move-stay')
+    w.engine.step()
+    expect(w.player.act({ kind: 'move', to: 'chapel' }).ok).toBe(true)
+    expect(w.player.view().pending.map((p) => p.label)).toEqual(['Heading to The Quiet Chapel'])
+    w.engine.step()
+    expect(w.player.view().you.location.id).toBe('chapel')
+    expect(w.player.view().pending).toEqual([])
+    for (let i = 0; i < 6; i++) w.engine.step()
+    expect(w.player.view().you.location.id).toBe('chapel') // not walked off by the routine
+  })
+
+  it('a second choice of place replaces the first — even within the same hour', () => {
+    const w = setup('move-twice')
+    w.engine.step()
+    w.player.act({ kind: 'move', to: 'chapel' })
+    w.engine.step()
+    expect(w.player.view().you.location.id).toBe('chapel')
+    w.player.act({ kind: 'move', to: 'mess' })
+    w.engine.step()
+    expect(w.player.view().you.location.id).toBe('mess')
+    w.player.act({ kind: 'move', to: 'archive' })
+    w.player.act({ kind: 'move', to: 'promenade' })
+    w.engine.step()
+    expect(w.player.view().you.location.id).toBe('promenade')
+  })
+
+  it('"let an hour pass" advances the world now', () => {
+    const w = setup('wait')
+    w.engine.step()
+    w.player.act({ kind: 'move', to: 'dock' })
+    const before = w.engine.state.tick
+    expect(w.player.wait().ok).toBe(true)
+    expect(w.engine.state.tick).toBe(before + 1)
+    expect(w.player.view().you.location.id).toBe('dock')
+    expect(w.player.wait().ok).toBe(false) // gently rate-limited
+  })
+})
+
 describe('the journal respects information boundaries (spec §7.3)', () => {
   it('contains only events the player could know first-hand', () => {
     const w = setup('bounds')

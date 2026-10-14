@@ -72,18 +72,47 @@ export class Engine {
     return Math.min(CATCH_UP_CAP, Math.max(0, Math.floor((nowMs - w.lastTickAt) / this.opts.tickMs)))
   }
 
-  start(): void {
-    if (this.timer) return
-    const owed = this.ticksOwed()
-    for (let i = 0; i < owed; i++) this.step()
-    this.opts.store.setRunning(this.opts.worldId, true, this.opts.tickMs)
+  private lastStepAt = Date.now()
+
+  get tickMs(): number {
+    return this.opts.tickMs
+  }
+
+  /** Real milliseconds until the next scheduled tick (0 if not running). */
+  nextTickInMs(now = Date.now()): number {
+    if (!this.timer) return 0
+    return Math.max(0, this.lastStepAt + this.opts.tickMs - now)
+  }
+
+  private schedule(): void {
+    if (this.timer) clearInterval(this.timer)
+    this.lastStepAt = Date.now()
     this.timer = setInterval(() => {
+      this.lastStepAt = Date.now()
       try {
         this.step()
       } catch (err) {
         console.error('[engine] tick failed:', err)
       }
     }, this.opts.tickMs)
+  }
+
+  /**
+   * Let an hour pass now (the player chose to wait). Runs one tick
+   * immediately and restarts the clock, so the next tick is a full period away.
+   */
+  stepNow(): TickResult {
+    const r = this.step()
+    if (this.timer) this.schedule()
+    return r
+  }
+
+  start(): void {
+    if (this.timer) return
+    const owed = this.ticksOwed()
+    for (let i = 0; i < owed; i++) this.step()
+    this.opts.store.setRunning(this.opts.worldId, true, this.opts.tickMs)
+    this.schedule()
   }
 
   stop(): void {

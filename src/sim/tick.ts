@@ -19,7 +19,7 @@ import { cloneState } from './state.js'
  * Bump whenever a change to src/sim or src/world would alter outcomes.
  * Replay is only meaningful against the same version; it is stamped on each world.
  */
-export const SIM_VERSION = 4
+export const SIM_VERSION = 5
 
 export interface TickResult {
   state: WorldState

@@ -137,6 +137,11 @@ export function createApp(opts: AppOptions) {
     return c.json(r, r.ok ? 200 : 400)
   })
 
+  app.post('/api/wait', (c) => {
+    const r = player.wait()
+    return c.json(r, r.ok ? 200 : 429)
+  })
+
   app.post('/api/say', async (c) => {
     const body = (await c.req.json().catch(() => null)) as { to?: string; text?: string; reveals?: string; register?: 'open' | 'guarded' | 'warm' | 'cold' | 'formal' } | null
     if (!body?.to || !body.text) return c.json({ ok: false, error: 'to and text required' }, 400)

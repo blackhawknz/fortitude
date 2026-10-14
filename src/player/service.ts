@@ -44,12 +44,14 @@ export interface JournalEntry {
 }
 
 export interface PlayerView {
-  world: { name: string; tick: number; day: number; hour: number; time: string; boardHull: number; morale: number }
+  world: { name: string; tick: number; day: number; hour: number; time: string; boardHull: number; morale: number; nextTickInMs: number; tickMs: number }
   you: { name: string; location: { id: string; name: string; description: string }; activity: string; asleep: boolean; health: number; stress: number; mood: string; inventory: string[] }
   here: { id: string; name: string; role: string; pronouns: string; activity: string; asleep: boolean; relationship: string }[]
   places: { id: string; name: string; open: boolean; here: boolean }[]
   knows: { id: string; text: string; how: string }[]
   intents: { id: string; kind: string; target?: string; to?: string; until: string }[]
+  /** Actions you've chosen that the world hasn't got to yet (they happen at the next tick). */
+  pending: { kind: string; target?: string; to?: string; label: string; at: string }[]
   people: { id: string; name: string; role: string; relationship: string; met: boolean }[]
 }
 
@@ -66,7 +68,8 @@ export interface SayResult {
   note?: string
 }
 
-const DEFAULT_HOURS: Partial<Record<IntentKind, number>> = { move: 3, investigate: 2, observe: 2, work: 4, rest: 6, seek: 4, avoid: 8, confront: 4, confide: 4, ally: 6, withhold: 8 }
+// A move means "go there and stay": it stands for half a day unless you choose something else.
+const DEFAULT_HOURS: Partial<Record<IntentKind, number>> = { move: 12, investigate: 2, observe: 2, work: 4, rest: 6, seek: 4, avoid: 8, confront: 4, confide: 4, ally: 6, withhold: 8 }
 
 export interface PlayerServiceOptions {
   store: WorldStore
@@ -106,7 +109,7 @@ export class PlayerService {
     const { day, hour } = timeOf(s.tick)
     const label = (id: string) => RELATIONSHIP_LABEL[s.edges[`${PLAYER_ID}>${id}`]!.type]
     return {
-      world: { name: s.name, tick: s.tick, day, hour, time: formatTime(s.tick), boardHull: Math.round(s.station.reportedHull), morale: Math.round(s.station.morale) },
+      world: { name: s.name, tick: s.tick, day, hour, time: formatTime(s.tick), boardHull: Math.round(s.station.reportedHull), morale: Math.round(s.station.morale), nextTickInMs: this.opts.engine.nextTickInMs(), tickMs: this.opts.engine.tickMs },
       you: {
         name: this.name,
         location: { id: loc.id, name: loc.name, description: loc.description },
@@ -129,8 +132,12 @@ export class PlayerService {
       places: LOCATIONS.map((l) => ({ id: l.id, name: l.name, open: canEnter(s, PLAYER_ID, l.id, s.tick) === null, here: l.id === me.locationId })),
       knows: Object.values(s.knowledge[PLAYER_ID] ?? {})
         .sort((a, b) => a.tick - b.tick)
-        .map((k) => ({ id: k.fact, text: factVersion(k.fact, k.version ?? 0).text, how: describeSource(k.source) + ((k.hops ?? 0) > 1 ? ' � second-hand at best' : '') })),
+        .map((k) => ({ id: k.fact, text: factVersion(k.fact, k.version ?? 0).text, how: describeSource(k.source) + ((k.hops ?? 0) > 1 ? ' � second-hand at best' : '') })),
       intents: s.intents.filter((i) => i.agentId === PLAYER_ID && i.source === 'player').map((i) => ({ id: i.id, kind: i.kind, target: i.target, to: i.to, until: formatTime(i.expiresTick) })),
+      pending: this.opts.store
+        .pendingIntents(this.opts.worldId)
+        .filter((i) => i.agentId === PLAYER_ID && i.kind !== 'speak')
+        .map((i) => ({ kind: i.kind, target: i.target, to: i.to, label: describeAction(i.kind, i.to, i.target), at: formatTime(s.tick + 1) })),
       people: CAST.filter((c) => !c.isPlayer).map((c) => ({ id: c.id, name: c.name, role: c.role, relationship: label(c.id), met: s.edges[`${PLAYER_ID}>${c.id}`]!.encounters > 0 || c.id === 'alita' })),
     }
   }
@@ -179,9 +186,25 @@ export class PlayerService {
     // Pre-check against the present for immediate feedback; the tick re-checks for real.
     const v = validateIntent(s, proposal, tick + 1)
     if (!v.ok) return { ok: false, error: v.reason }
-    const id = `p.${tick}.${randomUUID().slice(0, 8)}`
+    // Sequence-ordered so that, within an hour, your latest choice is the one that counts.
+    const id = `p.${pad(tick)}.${String(this.seq++).padStart(6, '0')}-${randomUUID().slice(0, 4)}`
     this.opts.store.submitIntent(this.opts.worldId, proposal, tick, id)
     return { ok: true, intentId: id, appliesAt: formatTime(tick + 1) }
+  }
+
+  private lastWait = 0
+
+  /**
+   * Let an hour pass now instead of waiting for the clock. It's a single-player
+   * world, so hurrying time only changes how long you wait — the world still
+   * advances one adjudicated hour, exactly as a scheduled tick would.
+   */
+  wait(): { ok: boolean; error?: string; time?: string } {
+    const t = this.now()
+    if (t - this.lastWait < 2_000) return { ok: false, error: 'Give it a moment.' }
+    this.lastWait = t
+    this.opts.engine.stepNow()
+    return { ok: true, time: formatTime(this.state.tick) }
   }
 
   // ─── Talking ───────────────────────────────────────────────────────
@@ -285,6 +308,29 @@ export class PlayerService {
 
   isPlace(id: string): boolean {
     return isLocation(id)
+  }
+}
+
+function describeAction(kind: string, to?: string, target?: string): string {
+  const place = to && isLocation(to) ? locationDef(to).name : to
+  const who = target && isAgent(target) ? castMember(target).name : target
+  switch (kind) {
+    case 'move':
+      return `Heading to ${place}`
+    case 'investigate':
+      return `About to search ${place}`
+    case 'observe':
+      return `Going to watch ${who ?? place}`
+    case 'work':
+      return 'Getting to work'
+    case 'rest':
+      return 'Going to rest'
+    case 'seek':
+      return `Looking for ${who}`
+    case 'avoid':
+      return `Keeping clear of ${who}`
+    default:
+      return `${kind}${who ? ' ' + who : ''}${place ? ' → ' + place : ''}`
   }
 }
 
