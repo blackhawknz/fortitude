@@ -1,9 +1,9 @@
 import type { Intent, IntentKind, SimEvent, WorldState } from '../core/types.js'
 import { castMember, isAgent } from '../world/cast.js'
 import { isLocation, locationDef } from '../world/locations.js'
-import { factDef } from '../world/facts.js'
+import { factVersion } from '../world/facts.js'
 import { chance } from '../core/rng.js'
-import { learn } from './knowledge.js'
+import { learn, telling } from './knowledge.js'
 import { fulfil } from './intents.js'
 import { TickContext, type SimMemory } from './context.js'
 import { resolveEncounters } from './encounters.js'
@@ -19,7 +19,7 @@ import { cloneState } from './state.js'
  * Bump whenever a change to src/sim or src/world would alter outcomes.
  * Replay is only meaningful against the same version; it is stamped on each world.
  */
-export const SIM_VERSION = 3
+export const SIM_VERSION = 4
 
 export interface TickResult {
   state: WorldState
@@ -81,14 +81,17 @@ export function advanceTick(prev: WorldState, submissions: readonly Intent[]): T
       .sort()
     const bystanders = present.filter((p) => p !== speaker && p !== listener)
     const heard: string[] = []
-    if (i.fact) {
+    // A speaker reveals the version they believe — rumour or truth.
+    const told = i.fact ? telling(state, speaker, i.fact, 'speech', state.seed, tick, i.id) : null
+    const toldText = i.fact && told ? factVersion(i.fact, told.version).text : ''
+    if (i.fact && told) {
       const quiet = i.register === 'guarded' || i.register === 'warm'
-      learn(state, listener, i.fact, { kind: 'told', by: speaker, tick, confided: quiet }, tick)
+      learn(state, listener, i.fact, { kind: 'told', by: speaker, tick, confided: quiet }, tick, told)
       for (const b of bystanders) {
         const p = quiet ? 0.02 + (castMember(b).traits.perception / 100) * 0.16 : 0.9
         if (!chance(p, state.seed, tick, i.id, b, 'overhear-speech')) continue
         heard.push(b)
-        learn(state, b, i.fact, { kind: 'overheard', from: speaker, tick }, tick)
+        learn(state, b, i.fact, { kind: 'overheard', from: speaker, tick }, tick, told)
       }
       fulfilAll(state, speaker, listener, ['confide'], ctx.intentChanges)
     }
@@ -105,8 +108,8 @@ export function advanceTick(prev: WorldState, submissions: readonly Intent[]): T
       data: { intent: i.id, register: i.register, say: i.say, fact: i.fact, overheard: heard },
     })
     if (i.fact) {
-      ctx.remember(listener, `${castMember(speaker).name} told me: “${factDef(i.fact).text}”`, 4, ev.id)
-      for (const b of heard) ctx.remember(b, `Overheard ${castMember(speaker).name} telling ${castMember(listener).name}: “${factDef(i.fact).text}”`, 4, ev.id)
+      ctx.remember(listener, `${castMember(speaker).name} told me: “${toldText}”`, 4, ev.id)
+      for (const b of heard) ctx.remember(b, `Overheard ${castMember(speaker).name} telling ${castMember(listener).name}: “${toldText}”`, 4, ev.id)
     }
     // Conversation hold: people who've just been spoken to linger a moment to answer —
     // unless they're set on avoiding the speaker.

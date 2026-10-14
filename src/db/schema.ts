@@ -207,6 +207,9 @@ export const knowledge = sqliteTable(
     factId: text('fact_id').notNull(),
     tick: integer('tick').notNull(),
     sourceJson: text('source_json').notNull(),
+    /** 0 = the truth; n = rumour variant n. */
+    version: integer('version').notNull().default(0),
+    hops: integer('hops').notNull().default(0),
   },
   (t) => [primaryKey({ columns: [t.worldId, t.agentId, t.factId] })],
 )
@@ -268,6 +271,32 @@ export const externalSync = sqliteTable(
     syncedAt: integer('synced_at').notNull(),
   },
   (t) => [primaryKey({ columns: [t.worldId, t.kind, t.localId] })],
+)
+
+/** When the player was last actually looking (for the absence debrief and teasers). */
+export const playerPresence = sqliteTable('player_presence', {
+  worldId: text('world_id').primaryKey(),
+  lastSeenTick: integer('last_seen_tick').notNull().default(0),
+  lastSeenAt: integer('last_seen_at'), // unix ms
+  lastTeaserAt: integer('last_teaser_at'),
+  lastTeaserTick: integer('last_teaser_tick'),
+})
+
+/** Spec §8 notifications: in-app messages to the player (teasers sent while away). */
+export const notifications = sqliteTable(
+  'notifications',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    worldId: text('world_id').notNull(),
+    playerId: text('player_id').notNull(),
+    tick: integer('tick').notNull(),
+    kind: text('kind').notNull(), // 'teaser'
+    text: text('text').notNull(),
+    read: integer('read', { mode: 'boolean' }).notNull().default(false),
+    delivered: text('delivered'), // e.g. 'webhook' when pushed out
+    createdAt: integer('created_at').notNull(),
+  },
+  (t) => [index('notifications_world').on(t.worldId, t.read, t.tick)],
 )
 
 /** Every LLM turn: what was asked, what came back, what it cost. */

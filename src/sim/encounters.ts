@@ -1,7 +1,7 @@
 import type { AgentId, FactDef, IntentKind, Mood, OutcomeId, SimEvent } from '../core/types.js'
 import { chance, pick, rng, weighted } from '../core/rng.js'
 import { formatTime } from '../core/clock.js'
-import { CAST, castMember } from '../world/cast.js'
+import { CAST, castMember, PLAYER_ID } from '../world/cast.js'
 import { locationDef } from '../world/locations.js'
 import { factDef } from '../world/facts.js'
 import { OUTCOMES, outcomeDef, outcomeWeight, type Features } from '../world/outcomes.js'
@@ -16,7 +16,10 @@ import {
   learn,
   secretsAbout,
   shareableFacts,
+  telling,
+  believed,
 } from './knowledge.js'
+import { factVersion } from '../world/facts.js'
 import { fulfil } from './intents.js'
 import { historyLine, narrateEncounter, topicFor } from './narrate.js'
 
@@ -65,6 +68,9 @@ function chooseInitiator(ctx: TickContext, x: AgentId, y: AgentId): [AgentId, Ag
     2 * intentWeight(ctx, from, 'avoid', to) + BIAS_KINDS.reduce((sum, k) => sum + intentWeight(ctx, from, k, to), 0)
   const dx = drive(x, y)
   const dy = drive(y, x)
+  // The player's body never takes the lead unless the player meant to.
+  if (x === PLAYER_ID && dx === 0) return [y, x]
+  if (y === PLAYER_ID && dy === 0) return [x, y]
   if (dx !== dy) return dx > dy ? [x, y] : [y, x]
   const sx = castMember(x).traits.sociability
   const sy = castMember(y).traits.sociability
@@ -200,6 +206,13 @@ function resolvePair(ctx: TickContext, a: AgentId, b: AgentId, present: AgentId[
   const seed = ctx.seed
   const features = pairFeatures(ctx, a, b)
   let outcome = chooseOutcome(ctx, a, b, features)
+  // Autopilot never chooses for the player: no spreading what they know, no confrontations,
+  // unless the player asked for exactly that.
+  if (a === PLAYER_ID) {
+    const meant = (k: IntentKind) => intentWeight(ctx, a, k, b) > 0
+    if ((outcome === 'gossip' || outcome === 'betray' || (outcome === 'confide' && !meant('confide'))) ) outcome = 'connect'
+    if (outcome === 'confront' && !meant('confront')) outcome = 'disagree'
+  }
   const def = () => outcomeDef(outcome)
   const locationId = s.agents[a]!.locationId
   const place = locationDef(locationId).name
@@ -210,9 +223,9 @@ function resolvePair(ctx: TickContext, a: AgentId, b: AgentId, present: AgentId[
   let victim: AgentId | undefined
   if (outcome === 'confide') {
     // An agent who decided what to confide gets to say that — past their usual caution.
-    fact = intendedConfidence(ctx, a, b) ?? chooseFact(shareableFacts(s, a, b), a, b, 'confide', seed, tick, a, b, 'fact')
+    fact = intendedConfidence(ctx, a, b) ?? chooseFact(s, shareableFacts(s, a, b), a, b, 'confide', seed, tick, a, b, 'fact')
   } else if (outcome === 'gossip') {
-    fact = chooseFact(gossipFacts(s, a, b), a, b, 'gossip', seed, tick, a, b, 'fact')
+    fact = chooseFact(s, gossipFacts(s, a, b), a, b, 'gossip', seed, tick, a, b, 'fact')
   } else if (outcome === 'betray') {
     const options = confidedFacts(s, a, b)
     if (options.length) {
@@ -236,7 +249,13 @@ function resolvePair(ctx: TickContext, a: AgentId, b: AgentId, present: AgentId[
   }
 
   const o = def()
-  if (fact) learn(s, b, fact.id, { kind: 'told', by: a, tick, confided: outcome === 'confide' }, tick)
+  // What was actually said: the teller's version, maybe garbled further in the telling.
+  let said: { text: string; version: number; hops: number } | undefined
+  if (fact && (outcome === 'confide' || outcome === 'gossip' || outcome === 'betray')) {
+    const t = telling(s, a, fact.id, outcome, seed, tick, a, b)
+    said = { text: factVersion(fact.id, t.version).text, ...t }
+    learn(s, b, fact.id, { kind: 'told', by: a, tick, confided: outcome === 'confide' }, tick, t)
+  }
   if (outcome === 'betray' && fact && victim) {
     s.betrayals.push({ id: `b${tick}.${a}.${b}`, betrayer: a, victim, listener: b, fact: fact.id, tick, discovered: false })
   }
@@ -248,7 +267,8 @@ function resolvePair(ctx: TickContext, a: AgentId, b: AgentId, present: AgentId[
       const p = 0.02 + (castMember(w).traits.perception / 100) * 0.16
       if (!chance(p, seed, tick, a, b, w, 'overhear')) continue
       overheard.push(w)
-      if (fact) learn(s, w, fact.id, { kind: 'overheard', from: a, tick }, tick)
+      // Overhearers take away exactly what was said — rumour and all.
+      if (fact && said) learn(s, w, fact.id, { kind: 'overheard', from: a, tick }, tick, { version: said.version, hops: said.hops })
     }
   }
 
@@ -264,7 +284,8 @@ function resolvePair(ctx: TickContext, a: AgentId, b: AgentId, present: AgentId[
   }
 
   // ── Event ─────────────────────────────────────────────────────────────
-  const text = narrateEncounter(outcome, { a, b, place, topic, fact: fact?.text, victim }, seed, tick, a, b)
+  const factText = said?.text ?? fact?.text
+  const text = narrateEncounter(outcome, { a, b, place, topic, fact: factText, victim }, seed, tick, a, b)
   const privateTo =
     o.visibility === 'open' ? [a, b, ...bystanders] : o.visibility === 'quiet' ? [a, b, ...overheard] : o.bNotices ? [a, b] : [a]
   const ev = ctx.emit({
@@ -276,7 +297,7 @@ function resolvePair(ctx: TickContext, a: AgentId, b: AgentId, present: AgentId[
     text,
     magnitude: o.magnitude,
     privateTo: [...new Set(privateTo)].sort(),
-    data: { bystanders, overheard, fact: fact?.id, victim, topic },
+    data: { bystanders, overheard, fact: fact?.id, version: said?.version || undefined, victim, topic },
   })
 
   // ── Relationship + stress deltas ──────────────────────────────────────
@@ -301,11 +322,11 @@ function resolvePair(ctx: TickContext, a: AgentId, b: AgentId, present: AgentId[
 
   // ── Memory ────────────────────────────────────────────────────────────
   const imp = 1 + o.magnitude * 4
-  ctx.remember(a, historyLine(outcome, a, b, true, topic) + (fact && outcome !== 'observe' ? ` (“${fact.text}”)` : ''), imp, ev.id)
+  ctx.remember(a, historyLine(outcome, a, b, true, topic) + (factText && outcome !== 'observe' ? ` (“${factText}”)` : ''), imp, ev.id)
   if (outcome === 'observe' && fact) ctx.remember(a, `Watching ${castMember(b).name}, I noticed: ${fact.text}`, 4, ev.id)
-  if (o.bNotices) ctx.remember(b, historyLine(outcome, b, a, false, topic) + (fact ? ` (“${fact.text}”)` : ''), imp, ev.id)
+  if (o.bNotices) ctx.remember(b, historyLine(outcome, b, a, false, topic) + (factText ? ` (“${factText}”)` : ''), imp, ev.id)
   for (const w of overheard) {
-    if (fact) ctx.remember(w, `Overheard ${castMember(a).name} telling ${castMember(b).name}: “${fact.text}”`, 4, ev.id)
+    if (factText) ctx.remember(w, `Overheard ${castMember(a).name} telling ${castMember(b).name}: “${factText}”`, 4, ev.id)
   }
 
   // ── Intents satisfied by meeting ─────────────────────────────────────
@@ -386,12 +407,13 @@ function noticeExposure(ctx: TickContext, subject: AgentId, knower: AgentId): vo
       actorId: subject,
       targetId: knower,
       locationId: st.locationId,
-      text: `Something in how ${castMember(knower).name} spoke told ${castMember(subject).name} they know: “${f.text}”`,
+      // What they know is what they believe — possibly a rumour that names the subject wrongly.
+      text: `Something in how ${castMember(knower).name} spoke told ${castMember(subject).name} they know: “${believed(s, knower, f.id).text}”`,
       magnitude: 0.7,
       privateTo: [subject],
-      data: { fact: f.id, exposure: true },
+      data: { fact: f.id, exposure: true, version: k.version || undefined },
     })
-    ctx.remember(subject, `${castMember(knower).name} knows. (“${f.text}”) I don't know who told them.`, 5, ev.id)
-    if (!knows(s, subject, f.id)) learn(s, subject, f.id, { kind: 'self' }, ctx.tick)
+    ctx.remember(subject, `${castMember(knower).name} knows. (“${believed(s, knower, f.id).text}”) I don't know who told them.`, 5, ev.id)
+    if (!knows(s, subject, f.id)) learn(s, subject, f.id, { kind: 'overheard', from: knower, tick: ctx.tick }, ctx.tick, { version: k.version ?? 0, hops: (k.hops ?? 0) + 1 })
   }
 }

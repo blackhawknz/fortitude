@@ -5,36 +5,55 @@ import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import type { Engine, TickListener } from '../engine/engine.js'
 import type { TickResult } from '../sim/tick.js'
+import type { WorldStore } from '../db/store.js'
 import { PLAYER_ID } from '../world/cast.js'
 import type { PlayerService, PlayerAction } from '../player/service.js'
+import { buildDebrief, narrateDebrief, type TextModel } from '../player/presence.js'
 
 /**
  * The player's HTTP door. Loopback only (the serve CLI binds 127.0.0.1).
  *
- *   GET  /                 the web UI
- *   GET  /api/state        what your character can see right now
- *   GET  /api/journal      what your character knows happened (?since=tick&limit=)
- *   GET  /api/transcript/:id   your conversation with someone
- *   POST /api/act          { kind, to?, target?, fact?, hours? }  — adjudicated next tick
- *   POST /api/say          { to, text, reveals?, register? }      — answered now
- *   GET  /api/stream       SSE: { view, entries } after every tick
+ *   GET  /                       the web UI
+ *   GET  /api/state              what your character can see right now
+ *   GET  /api/journal            what your character knows happened (?since=tick&limit=)
+ *   GET  /api/debrief            while you were away (?prose=1 for a narrated note)
+ *   GET  /api/notifications      teasers sent while you were away; POST …/read to clear
+ *   GET  /api/transcript/:id     your conversation with someone
+ *   POST /api/act                { kind, to?, target?, fact?, hours? }  — adjudicated next tick
+ *   POST /api/say                { to, text, reveals?, register? }      — answered now
+ *   GET  /api/stream             SSE: { view, entries } after every tick
  *
- * State-changing requests must be same-origin (blocks drive-by requests to
- * localhost from other web pages). Set FORTITUDE_TOKEN to also require a bearer token.
+ * Presence: while a stream is open the player counts as present; the last
+ * tick they saw is recorded when they leave. The UI fetches the debrief
+ * BEFORE opening the stream, so the window covers the whole absence.
+ *
+ * State-changing requests must be same-origin. Set FORTITUDE_TOKEN to also
+ * require a bearer token.
  */
 
 const PUBLIC_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '../../public')
 
-export function createApp(opts: { player: PlayerService; engine: Engine; token?: string }) {
-  const { player, engine } = opts
+export interface AppOptions {
+  player: PlayerService
+  engine: Engine
+  store: WorldStore
+  worldId: string
+  token?: string
+  model?: TextModel | null
+}
+
+export function createApp(opts: AppOptions) {
+  const { player, engine, store, worldId } = opts
   const app = new Hono()
   const subscribers = new Set<(data: string) => void>()
+  const proseCache = new Map<string, string>()
 
   const listener: TickListener = {
     onTick(r: TickResult) {
       if (!subscribers.size) return
+      store.markSeen(worldId, r.state.tick)
       const entries = player.journal({ sinceTick: r.state.tick, limit: 40 })
-      const payload = JSON.stringify({ view: player.view(), entries })
+      const payload = JSON.stringify({ view: player.view(), entries, unread: store.notificationsFor(worldId, { unreadOnly: true }).length })
       for (const send of subscribers) send(payload)
     },
   }
@@ -60,6 +79,28 @@ export function createApp(opts: { player: PlayerService; engine: Engine; token?:
     return c.json({ entries: player.journal({ sinceTick: since !== undefined ? Number(since) : undefined, limit: Math.min(200, Math.max(1, limit)) }) })
   })
 
+  app.get('/api/debrief', async (c) => {
+    const d = buildDebrief(store, worldId, engine.state.tick)
+    if (c.req.query('prose') && opts.model && d.headline.length) {
+      const key = `${d.since.tick}:${d.now.tick}`
+      if (!proseCache.has(key)) {
+        try {
+          proseCache.set(key, await narrateDebrief(opts.model, d))
+        } catch {
+          /* the list is enough */
+        }
+      }
+      d.prose = proseCache.get(key)
+    }
+    return c.json(d)
+  })
+
+  app.get('/api/notifications', (c) => c.json({ notifications: store.notificationsFor(worldId, { limit: 20 }), unread: store.notificationsFor(worldId, { unreadOnly: true }).length }))
+  app.post('/api/notifications/read', (c) => {
+    store.markNotificationsRead(worldId)
+    return c.json({ ok: true })
+  })
+
   app.get('/api/transcript/:id', (c) => c.json({ with: c.req.param('id'), lines: player.transcript(c.req.param('id')) }))
 
   app.post('/api/act', async (c) => {
@@ -80,13 +121,15 @@ export function createApp(opts: { player: PlayerService; engine: Engine; token?:
     streamSSE(c, async (stream) => {
       const send = (data: string) => void stream.writeSSE({ event: 'tick', data })
       subscribers.add(send)
+      store.markSeen(worldId, engine.state.tick)
       await stream.writeSSE({ event: 'hello', data: JSON.stringify({ view: player.view(), you: PLAYER_ID }) })
       const keepAlive = setInterval(() => void stream.writeSSE({ event: 'ping', data: '' }), 15_000)
       await new Promise<void>((resolveStream) => stream.onAbort(() => resolveStream()))
       clearInterval(keepAlive)
       subscribers.delete(send)
+      store.markSeen(worldId, engine.state.tick)
     }),
   )
 
-  return app
+  return { app, isPresent: () => subscribers.size > 0, fetch: app.fetch, request: app.request.bind(app) }
 }

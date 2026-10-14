@@ -11,7 +11,8 @@ Design: [`fortitude-spec.md`](fortitude-spec.md) · Decisions and corrections: [
 - **Phase 2 — the whole cast:** done. All eleven residents LLM-backed, with a daily reflection pass (goals, opinions, beliefs, memory consolidation, private journals), three memory tiers with caps, speech and confiding as adjudicated knowledge transfers. ~35 LLM calls per in-world day.
 - **Phase 3 — Alita adapter:** done. The Queen is served by the real Alita system (`POST /agent/turn` / `/agent/reflect`, scoped fiction memory), with automatic fallback to the local model, a circuit breaker, and an outbox that reconciles her memories when Alita returns. See [`docs/alita-integration.md`](docs/alita-integration.md); **restart the Alita backend to load the new routes.**
 - **Phase 4 — the player:** done. The player is the twelfth resident: a newcomer from dirtside with a body, a location and an autopilot routine for when nobody's playing. Talk to anyone in the same room in real time; what's said and revealed is adjudicated on the next tick. The journal shows only what your character could know. Web UI at `http://127.0.0.1:4100/` when `npm start` is running.
-- Phase 5 (presence: absence debrief, rumours, notifications): next.
+- **Phase 5 — presence:** done. Rumours distort as they travel, and a garbled rumour can blame the wrong person. A "while you were away" debrief shows the three things worth telling you, built only from what your character knows. Spoiler-free teasers arrive in-app (plus an optional webhook) while you're away.
+- Phase 6 (polish: portraits, mood, sound, world-authoring studio): not started.
 
 ## Setup
 

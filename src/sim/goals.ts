@@ -2,7 +2,7 @@ import type { AgentId, FactId, WorldState } from '../core/types.js'
 import { CAST, allGoals, castMember } from '../world/cast.js'
 import { FACTS } from '../world/facts.js'
 import type { TickContext } from './context.js'
-import { knowersOf, knows } from './knowledge.js'
+import { believersAboutSubject, knows, knowsTruth } from './knowledge.js'
 
 const initialKnowers = new Map<FactId, Set<AgentId>>()
 for (const c of CAST) for (const k of c.knows) (initialKnowers.get(k.fact) ?? initialKnowers.set(k.fact, new Set()).get(k.fact)!).add(c.id)
@@ -13,10 +13,12 @@ function progress(s: WorldState, agentId: AgentId, goalId: string): number {
   if (!g) return 0
   switch (g.kind) {
     case 'learn':
-      return g.facts.filter((f) => knows(s, agentId, f)).length / g.facts.length
+      // Only the truth counts. A rumour of it is not progress.
+      return g.facts.filter((f) => knowsTruth(s, agentId, f)).length / g.facts.length
     case 'conceal': {
       const start = initialKnowers.get(g.fact)?.size ?? 1
-      const spread = knowersOf(s, g.fact).length - start
+      // A rumour that blames someone else doesn't expose you.
+      const spread = believersAboutSubject(s, g.fact).length - start
       return Math.max(0, 1 - spread / Math.max(1, CAST.length - start))
     }
     case 'maintain':

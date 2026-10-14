@@ -3,7 +3,7 @@ import { INTENT_KINDS } from '../core/types.js'
 import { formatTime, timeOf } from '../core/clock.js'
 import { CAST, castMember } from '../world/cast.js'
 import { LOCATIONS, locationDef } from '../world/locations.js'
-import { factDef } from '../world/facts.js'
+import { factVersion } from '../world/facts.js'
 import { RELATIONSHIP_LABEL } from '../sim/relationships.js'
 import { canEnter } from '../sim/intents.js'
 import type { WorldStore } from '../db/store.js'
@@ -92,8 +92,9 @@ export function buildContextPacket(store: WorldStore, state: WorldState, agentId
   const loc = locationDef(a.locationId)
 
   const known = Object.values(state.knowledge[agentId] ?? {}).sort((x, y) => x.tick - y.tick || (x.fact < y.fact ? -1 : 1))
+  // Each item is what THIS agent believes — a rumour if that's what reached them.
   const knowledge = known.map((k) => {
-    const f = factDef(k.fact)
+    const f = { id: k.fact, text: factVersion(k.fact, k.version ?? 0).text }
     const how =
       k.source.kind === 'self'
         ? 'you have always known'
@@ -118,7 +119,7 @@ export function buildContextPacket(store: WorldStore, state: WorldState, agentId
   const rumours = known
     .filter((k) => (k.source.kind === 'told' && !k.source.confided) || k.source.kind === 'overheard')
     .slice(-5)
-    .map((k) => factDef(k.fact).text)
+    .map((k) => factVersion(k.fact, k.version ?? 0).text)
 
   const memories = store.episodic(state.id, agentId, opts.memoryLimit ?? 30)
   // Rank: importance first, recency second; keep the top slice, then present oldest → newest.

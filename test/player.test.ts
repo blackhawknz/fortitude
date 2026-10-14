@@ -171,7 +171,7 @@ describe('HTTP door', () => {
   it('serves state, accepts actions, refuses cross-origin writes', async () => {
     const w = setup('http')
     w.engine.step()
-    const app = createApp({ player: w.player, engine: w.engine })
+    const app = createApp({ player: w.player, engine: w.engine, store: w.store, worldId: 'pw' })
     const state = (await (await app.request('/api/state')).json()) as { you: { name: string } }
     expect(state.you.name).toBe('Rowan')
     const ok = await app.request('/api/act', { method: 'POST', headers: { 'content-type': 'application/json', host: 'localhost:4100', origin: 'http://localhost:4100' }, body: JSON.stringify({ kind: 'move', to: 'promenade' }) })
@@ -183,7 +183,7 @@ describe('HTTP door', () => {
 
   it('optionally requires a token', async () => {
     const w = setup('http-token')
-    const app = createApp({ player: w.player, engine: w.engine, token: 's3cret' })
+    const app = createApp({ player: w.player, engine: w.engine, store: w.store, worldId: 'pw', token: 's3cret' })
     expect((await app.request('/api/state')).status).toBe(401)
     expect((await app.request('/api/state', { headers: { authorization: 'Bearer s3cret' } })).status).toBe(200)
   })

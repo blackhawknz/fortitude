@@ -172,6 +172,12 @@ export interface FactDef {
   valence: number
   /** Topic tag, used by narration. */
   topic: string
+  /**
+   * How it sounds once it has been passed around. Gossip and overhearing can
+   * garble a fact into one of these; the hearer believes the garbled version
+   * (including who it is about). Truth from evidence or confidence replaces it.
+   */
+  rumours?: { text: string; subject?: AgentId | null; valence?: number }[]
 }
 
 export type KnowledgeSource =
@@ -185,6 +191,10 @@ export interface Knowing {
   fact: FactId
   source: KnowledgeSource
   tick: Tick
+  /** 0 / absent = the truth; n ≥ 1 = rumour variant n (FactDef.rumours[n-1]). */
+  version?: number
+  /** How many mouths it passed through to get here (0 = first-hand). */
+  hops?: number
 }
 
 /** A record that `betrayer` passed on something `victim` confided. Victim does not know — yet. */

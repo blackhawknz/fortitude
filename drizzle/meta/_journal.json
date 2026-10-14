@@ -15,6 +15,20 @@
       "when": 1791969632873,
       "tag": "0001_external_sync",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1791971579836,
+      "tag": "0002_knowledge_versions",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1791971728538,
+      "tag": "0003_presence",
+      "breakpoints": true
     }
   ]
 }

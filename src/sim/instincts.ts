@@ -3,6 +3,7 @@ import { chance } from '../core/rng.js'
 import { HOURS_PER_DAY, timeOf } from '../core/clock.js'
 import { CAST, castMember } from '../world/cast.js'
 import { factDef } from '../world/facts.js'
+import { believed } from './knowledge.js'
 import { edge } from './relationships.js'
 
 /**
@@ -84,12 +85,13 @@ export function instinctProposals(state: WorldState, tick: Tick): Intent[] {
     if (t.candour >= 50) {
       const fresh = Object.values(state.knowledge[c.id] ?? {}).find((k) => {
         if (k.source.kind === 'self' || tick - k.tick > 48) return false
-        const f = factDef(k.fact)
-        return f.subject && f.subject !== c.id && f.secrecy >= 0.5 && state.agents[f.subject]?.alive
+        const b = believed(state, c.id, k.fact)
+        return b.subject && b.subject !== c.id && factDef(k.fact).secrecy >= 0.5 && state.agents[b.subject]?.alive
       })
       if (fresh && chance(0.35, seed, tick, c.id, 'reflex-ask')) {
-        const subject = factDef(fresh.fact).subject!
-        push({ agentId: c.id, kind: 'confront', target: subject, reason: `I heard: ${factDef(fresh.fact).text}`, weight: 0.55, expiresTick: tick + 15, source: 'instinct' })
+        // Confront whoever you BELIEVE it's about — a rumour can send you after the wrong person.
+        const heard = believed(state, c.id, fresh.fact)
+        push({ agentId: c.id, kind: 'confront', target: heard.subject!, reason: `I heard: ${heard.text}`, weight: 0.55, expiresTick: tick + 15, source: 'instinct' })
       }
     }
   }

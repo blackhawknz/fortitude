@@ -161,7 +161,13 @@ export class WorldStore {
     const knowledgeMap: Record<AgentId, Record<string, Knowing>> = {}
     for (const c of CAST) knowledgeMap[c.id] = {}
     for (const r of this.db.select().from(t.knowledge).where(eq(t.knowledge.worldId, worldId)).all()) {
-      ;(knowledgeMap[r.agentId] ??= {})[r.factId] = { fact: r.factId, tick: r.tick, source: P(r.sourceJson, { kind: 'self' }) }
+      ;(knowledgeMap[r.agentId] ??= {})[r.factId] = {
+        fact: r.factId,
+        tick: r.tick,
+        source: P(r.sourceJson, { kind: 'self' }),
+        ...(r.version ? { version: r.version } : {}),
+        ...(r.hops ? { hops: r.hops } : {}),
+      }
     }
 
     const st = this.db.select().from(t.station).where(eq(t.station.worldId, worldId)).get()!
@@ -271,9 +277,15 @@ export class WorldStore {
       }
 
       const kRows = Object.entries(s.knowledge).flatMap(([agentId, facts]) =>
-        Object.values(facts).map((k) => ({ worldId: s.id, agentId, factId: k.fact, tick: k.tick, sourceJson: J(k.source) })),
+        Object.values(facts).map((k) => ({ worldId: s.id, agentId, factId: k.fact, tick: k.tick, sourceJson: J(k.source), version: k.version ?? 0, hops: k.hops ?? 0 })),
       )
-      for (let i = 0; i < kRows.length; i += 100) this.db.insert(t.knowledge).values(kRows.slice(i, i + 100)).onConflictDoNothing().run()
+      // Upsert: a rumour can be replaced by the truth.
+      for (let i = 0; i < kRows.length; i += 100)
+        this.db
+          .insert(t.knowledge)
+          .values(kRows.slice(i, i + 100))
+          .onConflictDoUpdate({ target: [t.knowledge.worldId, t.knowledge.agentId, t.knowledge.factId], set: { tick: ex('tick'), sourceJson: ex('source_json'), version: ex('version'), hops: ex('hops') } })
+          .run()
 
       for (const b of s.betrayals) {
         this.db.insert(t.betrayals)
@@ -628,6 +640,51 @@ export class WorldStore {
         .where(and(eq(t.agentTurns.worldId, worldId), eq(t.agentTurns.agentId, agentId), eq(t.agentTurns.kind, 'reflect'), eq(t.agentTurns.status, 'ok')))
         .get()?.tick ?? null
     )
+  }
+
+  // ─── Presence & notifications ────────────────────────────────────────
+
+  presence(worldId: string) {
+    return (
+      this.db.select().from(t.playerPresence).where(eq(t.playerPresence.worldId, worldId)).get() ?? {
+        worldId,
+        lastSeenTick: 0,
+        lastSeenAt: null,
+        lastTeaserAt: null,
+        lastTeaserTick: null,
+      }
+    )
+  }
+
+  markSeen(worldId: string, tick: number, at = now()): void {
+    this.db
+      .insert(t.playerPresence)
+      .values({ worldId, lastSeenTick: tick, lastSeenAt: at })
+      .onConflictDoUpdate({ target: t.playerPresence.worldId, set: { lastSeenTick: tick, lastSeenAt: at } })
+      .run()
+  }
+
+  markTeaser(worldId: string, tick: number, at = now()): void {
+    this.presence(worldId) // ensure row semantics
+    this.db
+      .insert(t.playerPresence)
+      .values({ worldId, lastTeaserTick: tick, lastTeaserAt: at })
+      .onConflictDoUpdate({ target: t.playerPresence.worldId, set: { lastTeaserTick: tick, lastTeaserAt: at } })
+      .run()
+  }
+
+  addNotification(worldId: string, playerId: string, tick: number, kind: string, text: string, delivered: string | null = null): number {
+    return Number(this.db.insert(t.notifications).values({ worldId, playerId, tick, kind, text, delivered, createdAt: now() }).run().lastInsertRowid)
+  }
+
+  notificationsFor(worldId: string, opts: { unreadOnly?: boolean; limit?: number } = {}) {
+    const conds = [eq(t.notifications.worldId, worldId)]
+    if (opts.unreadOnly) conds.push(eq(t.notifications.read, false))
+    return this.db.select().from(t.notifications).where(and(...conds)).orderBy(desc(t.notifications.id)).limit(opts.limit ?? 20).all()
+  }
+
+  markNotificationsRead(worldId: string): void {
+    this.db.update(t.notifications).set({ read: true }).where(eq(t.notifications.worldId, worldId)).run()
   }
 
   // ─── External memory outbox ──────────────────────────────────────────

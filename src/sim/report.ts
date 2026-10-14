@@ -80,10 +80,12 @@ export function storyReport(start: WorldState, end: WorldState, events: SimEvent
     const added = after.filter((a) => !before.includes(a))
     if (!added.length) continue
     const how = added.map((a) => {
-      const src = end.knowledge[a]![f.id]!.source
+      const k = end.knowledge[a]![f.id]!
+      const src = k.source
       const via =
         src.kind === 'told' ? `told by ${name(src.by)}${src.confided ? ' in confidence' : ''}` : src.kind === 'overheard' ? `overheard ${name(src.from)}` : src.kind
-      return `${name(a)} (${via})`
+      const rumour = k.version ? ` — believes: “${f.rumours?.[k.version - 1]?.text}”` : ''
+      return `${name(a)} (${via}${rumour})`
     })
     out.push(`  “${f.text}”`, `     ${before.map(name).join(', ')}  +  ${how.join('; ')}`)
   }

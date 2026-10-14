@@ -22,7 +22,8 @@ import { openDb } from '../db/client.js'
 import { WorldStore } from '../db/store.js'
 import { Engine } from '../engine/engine.js'
 import { AgentRuntime } from '../agents/runtime.js'
-import { localBackendFromEnv, type AgentBackend } from '../agents/backend.js'
+import { LocalBackend, localBackendFromEnv, type AgentBackend } from '../agents/backend.js'
+import { TeaserService } from '../player/presence.js'
 import { loadEnv, parseArgs } from './args.js'
 import { AlitaBackend, AlitaMemorySync, alitaClientFromEnv, castBackends } from '../agents/alita.js'
 
@@ -87,8 +88,24 @@ engine.listeners.push({
 // The player's door: HTTP API + web UI, loopback only.
 const player = new PlayerService({ store, engine, worldId, backends: backend ? castBackends(backend, alitaBackend) : {} })
 const port = Number(args.port ?? process.env.FORTITUDE_PORT ?? 4100)
-const app = createApp({ player, engine, token: process.env.FORTITUDE_TOKEN || undefined })
-serveHttp({ fetch: app.fetch, hostname: '127.0.0.1', port })
+const textModel = backend instanceof LocalBackend ? backend : null
+const web = createApp({ player, engine, store, worldId, token: process.env.FORTITUDE_TOKEN || undefined, model: textModel })
+serveHttp({ fetch: web.fetch, hostname: '127.0.0.1', port })
+
+// Presence: teasers while the player is away (in-app; optional webhook — ntfy/Discord/Slack-style).
+engine.listeners.push(
+  new TeaserService({
+    store,
+    engine,
+    worldId,
+    isPresent: web.isPresent,
+    model: textModel,
+    webhookUrl: process.env.FORTITUDE_TEASER_WEBHOOK || null,
+    minAwayMs: Number(process.env.FORTITUDE_TEASER_AFTER_MS ?? 2 * 3_600_000),
+    cooldownMs: Number(process.env.FORTITUDE_TEASER_COOLDOWN_MS ?? 6 * 3_600_000),
+    onTeaser: (t) => out(`  ✉ teaser: ${t}`),
+  }),
+)
 
 const owed = engine.ticksOwed()
 out(`Fortitude "${worldId}" @ ${formatTime(engine.state.tick)} · ${tickMs / 1000}s/tick · ${runtime ? `${RESIDENTS.length} residents via ${backend!.name}` : 'dormant'}${alitaClient ? ` · Queen via Alita at ${alitaClient.url}` : ''}${owed ? ` · catching up ${owed} ticks` : ''}`)

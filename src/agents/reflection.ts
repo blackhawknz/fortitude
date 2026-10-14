@@ -3,7 +3,7 @@ import type { AgentId, WorldState } from '../core/types.js'
 import { MOODS, type Mood } from '../core/types.js'
 import { formatTime, timeOf } from '../core/clock.js'
 import { CAST, castMember, edgeSeed, isAgent } from '../world/cast.js'
-import { factDef } from '../world/facts.js'
+import { factVersion } from '../world/facts.js'
 import type { WorldStore } from '../db/store.js'
 import type { ContextPacket } from './packet.js'
 
@@ -100,7 +100,7 @@ export function buildReflectionPacket(store: WorldStore, state: WorldState, agen
       .map((e) => ({ when: formatTime(e.tick), type: e.outcome ?? e.type, text: e.text })),
     todays_memories: store.episodicSince(state.id, agentId, since + 1, 50).map((m) => ({ id: m.id, when: formatTime(m.tick), text: m.text, importance: m.importance })),
     relationships,
-    knowledge: Object.keys(state.knowledge[agentId] ?? {}).map((id) => ({ id, text: factDef(id).text })),
+    knowledge: Object.values(state.knowledge[agentId] ?? {}).map((k) => ({ id: k.fact, text: factVersion(k.fact, k.version ?? 0).text })),
     beliefs: semantic.filter((r) => r.kind === 'belief').map((r) => ({ id: r.id, text: r.text, weight: r.weight })),
     recent_days: semantic
       .filter((r) => r.kind === 'summary')

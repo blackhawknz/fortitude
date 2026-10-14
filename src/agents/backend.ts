@@ -63,6 +63,15 @@ export class LocalBackend implements AgentBackend {
     return this.complete(reflectionSystemPrompt(packet), reflectionUserPrompt(packet), 2200, signal)
   }
 
+  /** Plain prose (debriefs, teasers). No JSON contract. */
+  async text(system: string, user: string, maxTokens = 300, signal?: AbortSignal): Promise<string> {
+    const res = await this.client.chat.completions.create(
+      { model: this.opts.model, messages: [{ role: 'system', content: system }, { role: 'user', content: user }], temperature: 0.8, max_tokens: maxTokens },
+      { signal },
+    )
+    return (res.choices[0]?.message?.content ?? '').trim()
+  }
+
   private async complete(system: string, user: string, maxTokens: number, signal?: AbortSignal): Promise<BackendReply> {
     const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
       { role: 'system', content: system },

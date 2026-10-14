@@ -44,6 +44,14 @@
   .tabs button { font-size:12px; } .tabs button.on { border-color:var(--accent); color:var(--accent); }
   .toast { position:fixed; bottom:16px; left:50%; transform:translateX(-50%); background:#20262f; border:1px solid var(--line); padding:8px 14px; border-radius:8px; color:var(--ink); display:none; }
   .muted { color:var(--dim); }
+  #away { position:fixed; inset:0; background:rgba(5,7,10,.78); display:none; align-items:center; justify-content:center; z-index:10; }
+  #away .card { width:min(640px, 92vw); max-height:84vh; overflow:auto; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:22px 26px; }
+  #away h3 { margin:0 0 4px; color:var(--accent); font-weight:600; letter-spacing:.06em; }
+  #away .prose { font-size:15px; line-height:1.6; margin:12px 0 16px; color:#e8dcc3; }
+  #away .item { padding:8px 0; border-bottom:1px solid var(--line); }
+  #away .item .w { font-size:11px; color:var(--dim); text-transform:uppercase; letter-spacing:.08em; }
+  .entry.new .w::before { content:"new · "; color:var(--accent); }
+  #bell { cursor:pointer; } #bell b { color:var(--accent); }
 </style>
 </head>
 <body>
@@ -52,8 +60,17 @@
   <span class="stat" id="time">—</span>
   <span class="stat">Board hull <b id="hull">—</b>%</span>
   <span class="stat">Morale <b id="morale">—</b></span>
+  <span class="stat" id="bell" title="Messages while you were away">✉ <b id="unread">0</b></span>
   <span class="stat" style="margin-left:auto"><b id="me">—</b> · <span id="mood">—</span> · <span id="act">—</span></span>
 </header>
+<div id="away"><div class="card">
+  <h3 id="awayTitle">While you were away</h3>
+  <div class="muted" id="awaySpan"></div>
+  <div class="prose" id="awayProse"></div>
+  <div id="awayItems"></div>
+  <div class="muted" id="awayStation" style="margin-top:12px"></div>
+  <div style="margin-top:16px; text-align:right"><button id="awayClose">Back to the ring</button></div>
+</div></div>
 <main>
   <section>
     <h2>Where you are</h2>
@@ -128,9 +145,38 @@ function render() {
   $('text').disabled = $('send').disabled = !sel || v.you.asleep
 }
 
+let sinceTick = Infinity
 function renderJournal() {
   const rows = journal.filter((e) => filter === 'all' || e.involved)
-  $('journal').innerHTML = rows.length ? rows.map((e) => `<div class="entry ${e.involved ? 'inv' : ''} ${e.privateToYou ? 'private' : ''}"><div class="w">${esc(e.when)}${e.place ? ' · ' + esc(e.place) : ''}</div><div class="t">${esc(e.text)}</div></div>`).join('') : '<p class="muted">Nothing yet.</p>'
+  $('journal').innerHTML = rows.length ? rows.map((e) => `<div class="entry ${e.involved ? 'inv' : ''} ${e.privateToYou ? 'private' : ''} ${e.tick > sinceTick ? 'new' : ''}"><div class="w">${esc(e.when)}${e.place ? ' · ' + esc(e.place) : ''}</div><div class="t">${esc(e.text)}</div></div>`).join('') : '<p class="muted">Nothing yet.</p>'
+}
+
+const KIND = { learned: 'You learned', rumour: 'You heard', sought: 'Someone came for you', involved: 'You were there', incident: 'On the station', feeling: 'You' }
+async function showDebrief() {
+  const d = await api('/api/debrief?prose=1')
+  sinceTick = d.since.tick
+  if (d.away.hours < 2 || (!d.headline.length && !d.station.incidents.length)) return
+  $('awaySpan').textContent = `${d.since.when} → ${d.now.when} · ${d.away.days >= 1 ? d.away.days + ' days' : d.away.hours + ' hours'} on the ring without you`
+  $('awayProse').textContent = d.prose ?? ''
+  $('awayItems').innerHTML = d.headline.map((i) => `<div class="item"><div class="w">${esc(KIND[i.kind] ?? i.kind)} · ${esc(i.when)}${i.place ? ' · ' + esc(i.place) : ''}</div>${esc(i.text)}</div>`).join('')
+  $('awayStation').textContent = d.station.boardHullThen != null ? `The board went from ${d.station.boardHullThen}% to ${d.station.boardHullNow}%. ${d.counts.journal} things reached you; ${d.counts.involvingYou} involved you.` : ''
+  $('away').style.display = 'flex'
+}
+$('awayClose').onclick = () => ($('away').style.display = 'none')
+
+async function refreshBell() {
+  const n = await api('/api/notifications')
+  $('unread').textContent = n.unread
+  $('bell').onclick = async () => {
+    if (!n.notifications.length) return toast('No messages.')
+    $('awaySpan').textContent = 'Messages that reached you while you were away'
+    $('awayProse').textContent = ''
+    $('awayItems').innerHTML = n.notifications.map((x) => `<div class="item"><div class="w">${x.read ? '' : 'new · '}tick ${x.tick}</div>${esc(x.text)}</div>`).join('')
+    $('awayStation').textContent = ''
+    $('away').style.display = 'flex'
+    await api('/api/notifications/read', {})
+    $('unread').textContent = 0
+  }
 }
 
 async function selectPerson(id) {
@@ -186,6 +232,9 @@ $('send').onclick = send
 $('text').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } })
 
 async function boot() {
+  // Debrief first: opening the stream marks you present and closes the "away" window.
+  await showDebrief()
+  await refreshBell()
   view = await api('/api/state')
   journal = (await api('/api/journal?limit=80')).entries
   render(); renderJournal()
@@ -193,6 +242,7 @@ async function boot() {
   es.addEventListener('tick', (ev) => {
     const d = JSON.parse(ev.data)
     view = d.view
+    if (typeof d.unread === 'number') $('unread').textContent = d.unread
     const seen = new Set(journal.map((e) => e.id))
     journal = [...d.entries.filter((e) => !seen.has(e.id)), ...journal].slice(0, 300)
     render(); renderJournal()

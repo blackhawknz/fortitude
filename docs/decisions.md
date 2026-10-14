@@ -100,6 +100,23 @@ Opinions do **not** change the sim's relationship numbers: they're the agent's r
 - **UI** (`public/index.html`). No build step. Where you are, who's here, places, actions; a conversation pane with register and "tell them…" (reveal a fact you know); journal / what you know / people.
 - **Pace.** At the 60 s default a conversation fits comfortably inside an in-world hour. At 8 s, people walk off while you type.
 
+## Phase 5 — presence
+
+- **Rumours distort in the telling.** Each fact has authored rumour variants (`FactDef.rumours`). They can exaggerate, go vague, or name the wrong person: "Sera opened the seal".
+  - Gossip and betrayal garble with probability ≈ (0.25 + 0.12 × (hops − 1)) × (1.3 − teller's candour), capped at 0.6.
+  - Confidences, evidence, observation and deliberate speech are exact. A teller who believes a rumour passes the rumour on, and overhearers take away exactly what was said.
+  - Knowledge stores `version` and `hops`. Everything that asks who a fact is about (opinion shifts and grudges, gossip and confide filters, confront reflexes, exposure) uses the **holder's believed version**. So a rumour blaming Sera makes people resent Sera.
+  - Truth from evidence or a confidence replaces a rumour; a rumour never replaces the truth. Correcting a belief doesn't undo the grudge it caused.
+  - "Learn" goals count only the truth.
+  - Characters' packets, reflections and the player's view show what each believes.
+- **The autopilot never chooses for the player.** An untended player body can be talked to, confided in and drawn into arguments. It never initiates gossip, betrayal, confiding or confrontation unless the player intended it. (Found in testing: an autopilot player was gossiping about Mira.)
+- **Presence.** While the UI's stream is open the player is present, and the last tick they saw is recorded when they leave (`player_presence`). The UI fetches the debrief before opening the stream.
+- **Absence debrief** (`src/player/presence.ts`). Built only from the player's visibility rows. Items are classified (learned / heard a rumour / someone came for you / you were there / station incident / your feelings), weighted, and the top three are picked with variety. Across seeded 2-day absences the headline has three items in most runs (spec §14). Optional prose narration sees only those items, so it can't add events (P5).
+- **Teasers** (open question 6: in-app plus optional webhook, no SMTP). Sent after `FORTITUDE_TEASER_AFTER_MS` (2 h) away, at most every `FORTITUDE_TEASER_COOLDOWN_MS` (6 h), and only for a strong item.
+  - The seed text says **who and where, never what**. The model that phrases it never sees a fact, so it can't spoil.
+  - Stored in `notifications` (spec §8) and POSTed to `FORTITUDE_TEASER_WEBHOOK` if set. The `{text, content}` payload works for ntfy, Discord and Slack-style hooks.
+- **UI:** a "While you were away" overlay on return, "new" markers in the journal, and an ✉ badge for teasers.
+
 ## Open questions carried forward
 
 1. ~~Tick speed default~~ — 60 s (see above).
@@ -107,6 +124,6 @@ Opinions do **not** change the sim's relationship numbers: they're the agent's r
 3. Romance (implemented, off by default).
 4. Death (implemented behind `settings.death`, off by default; breaches injure).
 5. Ending: hull decay is a setting (`hullDecayPerDay`, default 0.35 → ~180 in-world days to zero from 64).
-6. Teaser emails.
+6. ~~Teaser emails~~ — in-app + optional webhook; no SMTP (see Phase 5).
 7. ~~Player starting knowledge~~ — a newcomer: no secrets, a stranger to all but the Queen.
 8. ~~Reflection cadence vs. budget~~: daily is affordable at 60 s ticks; revisit if the default speed rises.

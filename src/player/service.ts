@@ -4,7 +4,7 @@ import { INTENT_KINDS } from '../core/types.js'
 import { formatTime, timeOf } from '../core/clock.js'
 import { CAST, castMember, isAgent, PLAYER_ID } from '../world/cast.js'
 import { LOCATIONS, isLocation, locationDef } from '../world/locations.js'
-import { factDef } from '../world/facts.js'
+import { factVersion } from '../world/facts.js'
 import { RELATIONSHIP_LABEL } from '../sim/relationships.js'
 import { canEnter, validateIntent } from '../sim/intents.js'
 import type { Engine } from '../engine/engine.js'
@@ -129,7 +129,7 @@ export class PlayerService {
       places: LOCATIONS.map((l) => ({ id: l.id, name: l.name, open: canEnter(s, PLAYER_ID, l.id, s.tick) === null, here: l.id === me.locationId })),
       knows: Object.values(s.knowledge[PLAYER_ID] ?? {})
         .sort((a, b) => a.tick - b.tick)
-        .map((k) => ({ id: k.fact, text: factDef(k.fact).text, how: describeSource(k.source) })),
+        .map((k) => ({ id: k.fact, text: factVersion(k.fact, k.version ?? 0).text, how: describeSource(k.source) + ((k.hops ?? 0) > 1 ? ' � second-hand at best' : '') })),
       intents: s.intents.filter((i) => i.agentId === PLAYER_ID && i.source === 'player').map((i) => ({ id: i.id, kind: i.kind, target: i.target, to: i.to, until: formatTime(i.expiresTick) })),
       people: CAST.filter((c) => !c.isPlayer).map((c) => ({ id: c.id, name: c.name, role: c.role, relationship: label(c.id), met: s.edges[`${PLAYER_ID}>${c.id}`]!.encounters > 0 || c.id === 'alita' })),
     }
@@ -227,7 +227,7 @@ export class PlayerService {
 
     const packet = buildContextPacket(this.opts.store, s, to, {
       kind: 'direct_address',
-      detail: `${this.name} (${castMember(PLAYER_ID).role.toLowerCase()}) says to you: “${text}”${reveals ? ` — telling you: ${factDef(reveals).text}` : ''}`,
+      detail: `${this.name} (${castMember(PLAYER_ID).role.toLowerCase()}) says to you: “${text}”${reveals ? ` — telling you: ${factVersion(reveals, s.knowledge[PLAYER_ID]![reveals]!.version ?? 0).text}` : ''}`,
       urgency: 1,
       tick,
     })
