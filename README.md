@@ -1,0 +1,55 @@
+# Fortitude
+
+A multi-agent social simulation aboard a dying ring station. Every named character is an autonomous agent with memory, goals, relationships and secrets. The world keeps running when you're not watching.
+
+Design: [`fortitude-spec.md`](fortitude-spec.md) · Decisions and corrections: [`docs/decisions.md`](docs/decisions.md)
+
+## Status
+
+- **Phase 0 — headless world:** done. Deterministic tick loop, schedules, encounters, directed relationships with grudges, a knowledge/secrets model, station decay and incidents, SQLite persistence, exact replay.
+- **Phase 1 — agent runtime:** done (verified against a mock backend). Context packets, structured responses, intent queue with adjudication, wake triggers, attention budgets, an OpenAI-compatible backend.
+- Phase 2+ (twelve agents, reflection, Alita adapter, player): not started.
+
+## Setup
+
+```sh
+npm install
+cp .env.example .env   # set FORTITUDE_LLM_BASE_URL / _MODEL / _API_KEY for real agent turns
+```
+
+Requires Node ≥ 22.
+
+## Run
+
+```sh
+# Phase 0: 30 headless days, story report (in memory)
+npm run sim -- --days 30 --seed fortitude-1 --log out/log.txt
+
+# ...persisted, then verify replay
+npm run sim -- --days 30 --db data/p0.db --world w1
+npm run replay -- --db data/p0.db --world w1
+
+# Phase 1: one LLM agent. --lockstep waits for turns between ticks (debug only)
+npm run agent -- --agent sera --days 3 --lockstep
+npm run agent -- --agent sera --days 3 --lockstep --mock      # no API key needed
+npm run agent -- --agent sera,kavi --days 1 --tick-ms 5000    # real time; the loop never waits
+
+npm test
+npm run typecheck
+```
+
+## Layout
+
+```
+src/core     rng (stateless, positional), clock, types
+src/world    authored content: locations, cast (the four authored things), facts, outcome table
+src/sim      the deterministic tick — pure (state, submissions) → (state, events)
+             intents · instincts · schedule · encounters · knowledge · places · station · goals
+src/db       Drizzle schema + WorldStore (persistence, scoped reads, intent queue)
+src/engine   the loop: phase 6 persist, phase 7 notify, catch-up
+src/agents   runtime: triggers, budget, context packet, prompt, response parsing, backends
+src/cli      sim · agent · replay
+test/        determinism, replay, persistence, information boundaries, resolver-bypass
+```
+
+**The one rule:** the generative layer can't change the world directly. Agents submit intents, and the tick adjudicates them. `src/sim` has no I/O, no clock and no `Math.random`, and a test enforces this.
