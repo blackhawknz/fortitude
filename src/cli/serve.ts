@@ -89,7 +89,15 @@ engine.listeners.push({
 const player = new PlayerService({ store, engine, worldId, backends: backend ? castBackends(backend, alitaBackend) : {} })
 const port = Number(args.port ?? process.env.FORTITUDE_PORT ?? 4100)
 const textModel = backend instanceof LocalBackend ? backend : null
-const web = createApp({ player, engine, store, worldId, token: process.env.FORTITUDE_TOKEN || undefined, model: textModel })
+const web = createApp({
+  player,
+  engine,
+  store,
+  worldId,
+  token: process.env.FORTITUDE_TOKEN || undefined,
+  model: textModel,
+  allowedOrigins: (process.env.FORTITUDE_ALLOWED_ORIGINS ?? '').split(',').map((s) => s.trim()).filter(Boolean),
+})
 serveHttp({ fetch: web.fetch, hostname: '127.0.0.1', port })
 
 // Presence: teasers while the player is away (in-app; optional webhook — ntfy/Discord/Slack-style).

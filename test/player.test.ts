@@ -5,7 +5,7 @@ import { Engine } from '../src/engine/engine.js'
 import { MockBackend } from '../src/agents/backend.js'
 import { AgentRuntime } from '../src/agents/runtime.js'
 import { PlayerService, secondPerson } from '../src/player/service.js'
-import { createApp } from '../src/server/http.js'
+import { createApp, writeAllowed } from '../src/server/http.js'
 import { CAST, castMember, PLAYER_ID } from '../src/world/cast.js'
 import { memoryStore } from './helpers.js'
 
@@ -179,6 +179,23 @@ describe('HTTP door', () => {
     const evil = await app.request('/api/act', { method: 'POST', headers: { 'content-type': 'application/json', host: 'localhost:4100', origin: 'https://evil.example' }, body: JSON.stringify({ kind: 'rest' }) })
     expect(evil.status).toBe(403)
     expect((await app.request('/')).status).toBe(200)
+  })
+
+  it('allows the UI however it was reached, refuses foreign sites', () => {
+    // localhost vs 127.0.0.1 (the reported bug)
+    expect(writeAllowed('http://localhost:4100', '127.0.0.1:4100', undefined)).toBe(true)
+    expect(writeAllowed('http://127.0.0.1:4100', 'localhost:4100', undefined)).toBe(true)
+    expect(writeAllowed('http://[::1]:4100', '127.0.0.1:4100', undefined)).toBe(true)
+    // IDE preview / port-forwarding proxy: browser says same-origin
+    expect(writeAllowed('https://abc-4100.preview.example.dev', 'localhost:4100', 'same-origin')).toBe(true)
+    // explicitly allowed proxy origin
+    expect(writeAllowed('https://tunnel.example', 'localhost:4100', undefined, ['https://tunnel.example'])).toBe(true)
+    // scripts without Origin
+    expect(writeAllowed(undefined, 'localhost:4100', undefined)).toBe(true)
+    // drive-by from another website
+    expect(writeAllowed('https://evil.example', 'localhost:4100', 'cross-site')).toBe(false)
+    expect(writeAllowed('https://evil.example', 'localhost:4100', undefined)).toBe(false)
+    expect(writeAllowed('null', 'localhost:4100', 'cross-site')).toBe(false)
   })
 
   it('optionally requires a token', async () => {

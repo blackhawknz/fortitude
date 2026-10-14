@@ -33,7 +33,35 @@ import { buildDebrief, narrateDebrief, type TextModel } from '../player/presence
 
 const PUBLIC_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '../../public')
 
+const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]', '::1'])
+
+/**
+ * Block drive-by writes from other websites without tripping over how the
+ * UI was reached. Allowed when any of these hold:
+ *  - no Origin header (curl, scripts: not a browser drive-by)
+ *  - the browser itself says the request is same-origin (Sec-Fetch-Site),
+ *    which stays true behind IDE previews and port-forwarding proxies
+ *  - the Origin's host matches the Host header
+ *  - the Origin is a loopback address (localhost vs 127.0.0.1 is not an attack)
+ *  - the Origin is explicitly allowed (FORTITUDE_ALLOWED_ORIGINS)
+ */
+export function writeAllowed(origin: string | undefined, host: string | undefined, secFetchSite: string | undefined, allowed: readonly string[] = []): boolean {
+  if (!origin) return true
+  if (secFetchSite === 'same-origin' || secFetchSite === 'none') return true
+  if (allowed.includes(origin)) return true
+  let url: URL
+  try {
+    url = new URL(origin)
+  } catch {
+    return false // e.g. "null" from a sandboxed frame or file://
+  }
+  if (host && url.host === host) return true
+  return LOOPBACK.has(url.hostname)
+}
+
 export interface AppOptions {
+  /** Extra origins allowed to write (e.g. a proxy URL). */
+  allowedOrigins?: string[]
   player: PlayerService
   engine: Engine
   store: WorldStore
@@ -61,10 +89,9 @@ export function createApp(opts: AppOptions) {
 
   app.use('/api/*', async (c, next) => {
     if (opts.token && c.req.header('authorization') !== `Bearer ${opts.token}` && c.req.query('token') !== opts.token) return c.json({ error: 'unauthorized' }, 401)
-    if (c.req.method !== 'GET') {
-      const origin = c.req.header('origin')
-      const host = c.req.header('host')
-      if (origin && host && new URL(origin).host !== host) return c.json({ error: 'cross-origin request refused' }, 403)
+    if (c.req.method !== 'GET' && !writeAllowed(c.req.header('origin'), c.req.header('host'), c.req.header('sec-fetch-site'), opts.allowedOrigins)) {
+      console.warn(`[http] refused ${c.req.method} ${c.req.path}: origin=${c.req.header('origin')} host=${c.req.header('host')} sec-fetch-site=${c.req.header('sec-fetch-site')}`)
+      return c.json({ error: 'cross-origin request refused (set FORTITUDE_ALLOWED_ORIGINS if you reach the UI through a proxy)' }, 403)
     }
     await next()
   })
