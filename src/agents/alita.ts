@@ -248,6 +248,7 @@ export function castBackends(local: AgentBackend, alita: AlitaBackend | null, on
   const out: Record<AgentId, AgentBackend> = {}
   for (const c of CAST) {
     if (only && !only.includes(c.id)) continue
+    if (c.backend === 'none') continue // the player is never LLM-driven
     out[c.id] = c.backend === 'alita' && alita ? alita : local
   }
   return out

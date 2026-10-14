@@ -89,13 +89,24 @@ Opinions do **not** change the sim's relationship numbers: they're the agent's r
 - pronouns are now in the cast
 - reflections are labelled with the day just ended, even when written after midnight
 
+## Phase 4 — the player
+
+- **The player takes the twelfth slot** (open question 2). They are a full participant: edges, knowledge and encounters, through the same intent pipeline (`source: 'player'`, weight 1.0). Display name lives in world settings (`--name` on `npm start` for new worlds).
+- **A newcomer from dirtside** (open question 7). They know no secrets and are a stranger to everyone (encounters 0, so first meetings wake residents as novel encounters), except the Queen, who knows them from home. That's the asymmetry the spec wants: the player as her confidant.
+- **Autopilot body.** When nobody's playing, the player follows a light routine (mess, market, promenade, Long Bar), so they are present and things happen to them. In seeded 15–20-day runs an untended player picks up 3–5 secrets through people (Nadia selling what she knows, the Queen confiding). Every one of them appears in the journal at the tick it arrived, with provenance.
+- **Conversation is real time; consequences keep the clock.** `say()` gets an immediate in-voice reply from the resident (their full context packet plus the transcript). Both lines are also submitted as `speak` intents and adjudicated next tick: facts revealed either way, conversation hold, relationship effects. The background runtime ignores the player's speech so nobody answers twice. Conversation intents carry sequence-ordered ids so replies never precede the line they answer. There's a per-resident chat cap (60/real hour).
+- **The journal is built only from `event_visibility` rows for the player.** Narration is rewritten into the second person, but quoted speech is left exactly as said.
+- **HTTP door** (`src/server/http.ts`, Hono). Loopback only, same-origin required for writes, optional `FORTITUDE_TOKEN`. SSE pushes the view plus new journal entries every tick. Chat is request/response rather than the spec's WebSocket: each exchange is one request (~3 s), so a socket adds nothing yet.
+- **UI** (`public/index.html`). No build step. Where you are, who's here, places, actions; a conversation pane with register and "tell them…" (reveal a fact you know); journal / what you know / people.
+- **Pace.** At the 60 s default a conversation fits comfortably inside an in-world hour. At 8 s, people walk off while you type.
+
 ## Open questions carried forward
 
 1. ~~Tick speed default~~ — 60 s (see above).
-2. Player: 12th slot or 13th.
+2. ~~Player: 12th slot or 13th~~ — 12th (see Phase 4).
 3. Romance (implemented, off by default).
 4. Death (implemented behind `settings.death`, off by default; breaches injure).
 5. Ending: hull decay is a setting (`hullDecayPerDay`, default 0.35 → ~180 in-world days to zero from 64).
 6. Teaser emails.
-7. Player starting knowledge.
+7. ~~Player starting knowledge~~ — a newcomer: no secrets, a stranger to all but the Queen.
 8. ~~Reflection cadence vs. budget~~: daily is affordable at 60 s ticks; revisit if the default speed rises.

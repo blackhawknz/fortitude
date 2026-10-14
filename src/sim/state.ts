@@ -1,6 +1,6 @@
 import type { AgentState, Edge, Knowing, LocationState, WorldSettings, WorldState } from '../core/types.js'
 import { DEFAULT_SETTINGS, edgeKey } from '../core/types.js'
-import { CAST, allGoals, edgeSeed } from '../world/cast.js'
+import { CAST, allGoals, edgeSeed, setPlayerName } from '../world/cast.js'
 import { LOCATIONS } from '../world/locations.js'
 import { relationshipType } from './relationships.js'
 import { initGoals } from './goals.js'
@@ -15,6 +15,8 @@ export interface NewWorldOptions {
 
 /** Build tick-0 state from the authored content. Pure. */
 export function createInitialState(opts: NewWorldOptions): WorldState {
+  const settings = { ...DEFAULT_SETTINGS, ...opts.settings }
+  setPlayerName(settings.playerName)
   const agents: Record<string, AgentState> = {}
   const knowledge: Record<string, Record<string, Knowing>> = {}
 
@@ -56,7 +58,8 @@ export function createInitialState(opts: NewWorldOptions): WorldState {
         warmth: s.warmth,
         tension: s.tension,
         grudge: 0,
-        encounters: 20, // years of living together
+        // Years of living together — except the newcomer, who has met nobody aboard.
+        encounters: a.isPlayer || b.isPlayer ? 0 : 20,
         lastTick: null,
         type: 'acquaintance',
         history: [],
@@ -77,7 +80,7 @@ export function createInitialState(opts: NewWorldOptions): WorldState {
     name: opts.name ?? 'Fortitude',
     seed: opts.seed,
     tick: 0,
-    settings: { ...DEFAULT_SETTINGS, ...opts.settings },
+    settings,
     agents,
     edges,
     locations,

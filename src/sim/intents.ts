@@ -121,9 +121,9 @@ export function applyIntents(state: WorldState, submissions: readonly Intent[], 
     return true
   })
 
-  const ordered = [...submissions].sort(
-    (a, b) => a.createdTick - b.createdTick || (a.agentId < b.agentId ? -1 : a.agentId > b.agentId ? 1 : 0) || (a.id < b.id ? -1 : 1),
-  )
+  // Stable order: creation tick, then id. Conversation intents carry sequence-ordered
+  // ids so a reply is never adjudicated (or narrated) before the line it answers.
+  const ordered = [...submissions].sort((a, b) => a.createdTick - b.createdTick || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
 
   for (const sub of ordered) {
     const v = validateIntent(state, sub, tick)

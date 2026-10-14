@@ -79,6 +79,8 @@ export interface ContextPacket {
   places: { id: string; name: string; open_to_you: boolean }[]
   people: { id: string; name: string; pronouns: string; role: string }[]
   available_actions: readonly string[]
+  /** Present only in a live conversation with the player: the exchange so far, oldest first. */
+  conversation?: { speaker: string; line: string }[]
 }
 
 /** Agents who can read true structural numbers rather than the posted board. */

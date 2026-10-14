@@ -26,7 +26,8 @@ export class TickContext {
   }
 
   emit(e: Omit<SimEvent, 'id' | 'tick'>): SimEvent {
-    const ev: SimEvent = { ...e, id: `${this.state.id}:${this.tick}:${this.events.length}`, tick: this.tick }
+    // Zero-padded sequence so ids sort in emission order within a tick.
+    const ev: SimEvent = { ...e, id: `${this.state.id}:${this.tick}:${String(this.events.length).padStart(4, '0')}`, tick: this.tick }
     this.events.push(ev)
     return ev
   }

@@ -47,9 +47,12 @@ Reply with ONLY a JSON object, no prose, in exactly this shape:
 export function userPrompt(p: ContextPacket): string {
   const { agent, ...rest } = p
   const slim = { goals: agent.goals, traits: agent.traits, ...rest }
+  const convo = p.conversation?.length
+    ? `\nYOU ARE IN A CONVERSATION RIGHT NOW with someone standing in front of you (see "conversation"). Answer them in "dialogue" with "to" set to their id — or set dialogue to null, if silence is what you would choose. One breath's worth of words. You don't owe a stranger your secrets.\n`
+    : ''
   return `It is Day ${p.world.day}, ${String(p.world.hour).padStart(2, '0')}:00. You are at ${p.self_state.location.name}.
 TRIGGER: ${p.trigger.detail}
-
+${convo}
 Your context:
 ${JSON.stringify(slim, null, 1)}`
 }

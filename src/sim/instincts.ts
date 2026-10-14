@@ -28,7 +28,7 @@ export function instinctProposals(state: WorldState, tick: Tick): Intent[] {
 
   for (const c of CAST) {
     const a = state.agents[c.id]!
-    if (!a.alive) continue
+    if (!a.alive || c.isPlayer) continue // the player decides for themselves
 
     // Authored drives fire at the start of their window.
     c.drives.forEach((d, i) => {

@@ -1,7 +1,7 @@
 import type { AgentId, SimEvent, WorldState } from '../core/types.js'
 import { rng } from '../core/rng.js'
 import { timeOf } from '../core/clock.js'
-import { castMember, allGoals } from '../world/cast.js'
+import { castMember, allGoals, PLAYER_ID } from '../world/cast.js'
 import type { Trigger } from './packet.js'
 
 /** The hour of the day an agent gets its routine check — staggered so the cast doesn't all wake at once. */
@@ -32,7 +32,8 @@ export function deriveTriggers(agentId: AgentId, state: WorldState, events: read
     const involved = e.actorId === agentId || e.targetId === agentId
     switch (e.type) {
       case 'speech':
-        if (e.targetId === agentId) out.push({ kind: 'direct_address', detail: e.text, urgency: 0.9, eventId: e.id, tick })
+        // The player's words are answered in real time by the conversation service, not on the next tick.
+        if (e.targetId === agentId && e.actorId !== PLAYER_ID) out.push({ kind: 'direct_address', detail: e.text, urgency: 0.9, eventId: e.id, tick })
         break
       case 'encounter': {
         if (involved) {

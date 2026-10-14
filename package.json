@@ -20,8 +20,10 @@
     "db:generate": "drizzle-kit generate"
   },
   "dependencies": {
+    "@hono/node-server": "^2.1.5",
     "better-sqlite3": "^13.0.3",
     "drizzle-orm": "^0.45.4",
+    "hono": "^4.13.13",
     "openai": "^7.33.0",
     "zod": "^4.6.7"
   },

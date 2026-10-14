@@ -305,6 +305,8 @@ export interface WorldSettings {
   hullDecayPerDay: number
   /** Base chance a co-located awake pair interacts in an hour. */
   encounterBase: number
+  /** Display name of the player's character (the twelfth slot). */
+  playerName: string
 }
 
 export const DEFAULT_SETTINGS: WorldSettings = {
@@ -312,6 +314,7 @@ export const DEFAULT_SETTINGS: WorldSettings = {
   death: false,
   hullDecayPerDay: 0.12, // ~530 in-world days from 64 to 0; at 60 s ticks ≈ 9 real days of continuous running
   encounterBase: -0.1,
+  playerName: 'Ash',
 }
 
 /** The complete deterministic state. Everything the tick reads and writes. */

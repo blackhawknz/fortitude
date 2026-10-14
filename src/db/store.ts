@@ -12,8 +12,8 @@ import type {
   WorldSettings,
   WorldState,
 } from '../core/types.js'
-import { edgeKey } from '../core/types.js'
-import { CAST } from '../world/cast.js'
+import { DEFAULT_SETTINGS, edgeKey } from '../core/types.js'
+import { CAST, setPlayerName } from '../world/cast.js'
 import { LOCATIONS } from '../world/locations.js'
 import { SIM_VERSION, type TickResult } from '../sim/tick.js'
 import type { Db } from './client.js'
@@ -103,6 +103,8 @@ export class WorldStore {
     const w = this.db.select().from(t.worlds).where(eq(t.worlds.id, worldId)).get()
     if (!w) throw new Error(`No world ${worldId}`)
     const extra = P<{ exposures?: string[]; intentSeq?: number }>(w.extraJson, {})
+    const settings = { ...DEFAULT_SETTINGS, ...P<Partial<WorldSettings>>(w.settingsJson, {}) }
+    setPlayerName(settings.playerName)
 
     const agents: Record<AgentId, AgentState> = {}
     const goals = this.db.select().from(t.agentGoals).where(eq(t.agentGoals.worldId, worldId)).orderBy(asc(t.agentGoals.id)).all()
@@ -170,7 +172,7 @@ export class WorldStore {
       name: w.name,
       seed: w.seed,
       tick: w.tick,
-      settings: P<WorldSettings>(w.settingsJson, {} as WorldSettings),
+      settings,
       agents,
       edges,
       locations,

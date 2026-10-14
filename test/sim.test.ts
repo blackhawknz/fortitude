@@ -109,7 +109,9 @@ describe('information boundaries in events', () => {
       expect(e.privateTo).toContain(e.targetId)
     }
   })
-  it('all twelve slots: eleven authored residents, twelfth left open', () => {
-    expect(CAST).toHaveLength(11)
+  it('twelve slots: eleven authored residents, the twelfth is the player', () => {
+    expect(CAST).toHaveLength(12)
+    expect(CAST.filter((c) => c.isPlayer).map((c) => c.id)).toEqual(['player'])
+    expect(CAST.find((c) => c.isPlayer)!.backend).toBe('none')
   })
 })

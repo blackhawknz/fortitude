@@ -317,38 +317,42 @@ export class AgentRuntime implements TickListener {
     this.opts.onTurn?.(record)
   }
 
-  /**
-   * Turn a parsed response into effects. The ONLY world-facing effect is
-   * submitting proposals; everything else is agent-owned annotation.
-   */
   private apply(agentId: AgentId, r: ParsedResponse, tick: number): string[] {
-    const { store, worldId } = this.opts
-    const ids: string[] = []
-    const submit = (p: Omit<IntentProposal, 'agentId' | 'source'>) => {
-      const id = `a.${agentId}.${tick}.${randomUUID().slice(0, 8)}`
-      store.submitIntent(worldId, { ...p, agentId, source: 'agent' }, tick, id)
-      ids.push(id)
-    }
-    for (const i of r.intents) submit(i)
-    if (r.dialogue) {
-      submit({
-        kind: 'speak',
-        target: r.dialogue.to,
-        say: r.dialogue.say,
-        register: r.dialogue.register,
-        reason: 'said aloud',
-        weight: 0.8,
-        expiresTick: tick + 3,
-        ...(r.dialogue.reveals ? { fact: r.dialogue.reveals } : {}),
-      })
-    }
-    for (const m of r.memoryWrites) store.addAgentMemory(worldId, agentId, tick, m.text, m.importance, m.private)
-    if (r.mood) store.setAgentMood(worldId, agentId, r.mood)
-    for (const g of r.goalUpdates) {
-      const own = store.agentGoals(worldId, agentId).find((x) => x.id === g.id)
-      if (own?.origin === 'agent') store.upsertAgentGoal(worldId, agentId, { id: g.id, text: own.text, weight: own.weight, status: 'active', note: g.note ?? own.note ?? undefined, perceived: g.progress }, tick)
-      else store.setGoalBelief(worldId, agentId, g.id, g.progress, g.note)
-    }
-    return ids
+    return applyResponse(this.opts.store, this.opts.worldId, agentId, r, tick)
   }
+}
+
+/**
+ * Turn a parsed response into effects. The ONLY world-facing effect is
+ * submitting proposals; everything else is agent-owned annotation.
+ * Shared by background turns and real-time conversation with the player.
+ */
+export function applyResponse(store: WorldStore, worldId: string, agentId: AgentId, r: ParsedResponse, tick: number, idPrefix?: string): string[] {
+  const ids: string[] = []
+  const submit = (p: Omit<IntentProposal, 'agentId' | 'source'>) => {
+    const id = idPrefix ? `${idPrefix}.${ids.length}` : `a.${agentId}.${tick}.${randomUUID().slice(0, 8)}`
+    store.submitIntent(worldId, { ...p, agentId, source: 'agent' }, tick, id)
+    ids.push(id)
+  }
+  for (const i of r.intents) submit(i)
+  if (r.dialogue) {
+    submit({
+      kind: 'speak',
+      target: r.dialogue.to,
+      say: r.dialogue.say,
+      register: r.dialogue.register,
+      reason: 'said aloud',
+      weight: 0.8,
+      expiresTick: tick + 3,
+      ...(r.dialogue.reveals ? { fact: r.dialogue.reveals } : {}),
+    })
+  }
+  for (const m of r.memoryWrites) store.addAgentMemory(worldId, agentId, tick, m.text, m.importance, m.private)
+  if (r.mood) store.setAgentMood(worldId, agentId, r.mood)
+  for (const g of r.goalUpdates) {
+    const own = store.agentGoals(worldId, agentId).find((x) => x.id === g.id)
+    if (own?.origin === 'agent') store.upsertAgentGoal(worldId, agentId, { id: g.id, text: own.text, weight: own.weight, status: 'active', note: g.note ?? own.note ?? undefined, perceived: g.progress }, tick)
+    else store.setGoalBelief(worldId, agentId, g.id, g.progress, g.note)
+  }
+  return ids
 }

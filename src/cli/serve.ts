@@ -4,6 +4,7 @@
  *   npm start                                   60 s ticks, all agents on FORTITUDE_LLM_*
  *   npm start -- --tick-ms 10000 --world w2     faster, another world
  *   npm start -- --dormant                      no LLM at all: instincts only
+ *   npm start -- --name Rowan --port 4100       player name (new worlds), UI port
  *
  * Ctrl+C stops cleanly: the loop halts, in-flight turns finish, and their
  * proposals land on the next start. Restarting catches up (max 60 ticks).
@@ -11,7 +12,10 @@
 import { mkdirSync, appendFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { formatTime, SPEEDS } from '../core/clock.js'
-import { CAST } from '../world/cast.js'
+import { RESIDENTS } from '../world/cast.js'
+import { serve as serveHttp } from '@hono/node-server'
+import { PlayerService } from '../player/service.js'
+import { createApp } from '../server/http.js'
 import { createInitialState } from '../sim/state.js'
 import { formatEvent } from '../sim/log.js'
 import { openDb } from '../db/client.js'
@@ -37,7 +41,8 @@ const out = (line: string) => {
 
 const store = new WorldStore(openDb(dbPath))
 if (!store.exists(worldId)) {
-  store.create(createInitialState({ id: worldId, seed }), tickMs)
+  const playerName = typeof args.name === 'string' ? args.name : process.env.FORTITUDE_PLAYER_NAME || 'Ash'
+  store.create(createInitialState({ id: worldId, seed, settings: { playerName } }), tickMs)
   out(`Created world "${worldId}" with seed "${seed}".`)
 }
 const engine = new Engine({ store, worldId, tickMs })
@@ -79,8 +84,15 @@ engine.listeners.push({
   },
 })
 
+// The player's door: HTTP API + web UI, loopback only.
+const player = new PlayerService({ store, engine, worldId, backends: backend ? castBackends(backend, alitaBackend) : {} })
+const port = Number(args.port ?? process.env.FORTITUDE_PORT ?? 4100)
+const app = createApp({ player, engine, token: process.env.FORTITUDE_TOKEN || undefined })
+serveHttp({ fetch: app.fetch, hostname: '127.0.0.1', port })
+
 const owed = engine.ticksOwed()
-out(`Fortitude "${worldId}" @ ${formatTime(engine.state.tick)} · ${tickMs / 1000}s/tick · ${runtime ? `${CAST.length} agents via ${backend!.name}` : 'dormant'}${alitaClient ? ` · Queen via Alita at ${alitaClient.url}` : ''}${owed ? ` · catching up ${owed} ticks` : ''}`)
+out(`Fortitude "${worldId}" @ ${formatTime(engine.state.tick)} · ${tickMs / 1000}s/tick · ${runtime ? `${RESIDENTS.length} residents via ${backend!.name}` : 'dormant'}${alitaClient ? ` · Queen via Alita at ${alitaClient.url}` : ''}${owed ? ` · catching up ${owed} ticks` : ''}`)
+out(`Play as ${player.name}: http://127.0.0.1:${port}/`)
 engine.start()
 
 let stopping = false

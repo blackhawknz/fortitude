@@ -89,6 +89,8 @@ export interface CastMember {
   maintains?: readonly SubsystemId[]
   /** Extra resting stress: what they carry that isn't a fact (fear, grief). */
   burden?: number
+  /** The twelfth slot: the human player's character. Never LLM-backed, no instincts. */
+  isPlayer?: boolean
 }
 
 // ─── Shared routine fragments ─────────────────────────────────────────────
@@ -482,7 +484,49 @@ export const CAST: readonly CastMember[] = [
     drives: [],
     causes: ['community'],
   },
+  {
+    // The twelfth slot (spec §9). The player's character: a body in the world,
+    // with an autopilot routine for when nobody is playing.
+    id: 'player',
+    name: 'Ash',
+    pronouns: 'they/them',
+    role: 'Newcomer from dirtside',
+    backend: 'none',
+    priority: 'minor',
+    isPlayer: true,
+    personality: 'New to the ring. Watchful, curious, owed nothing and owing nothing — yet.',
+    backstory: 'Came up on the last cargo shuttle three days ago with a work chit and a bunk assignment. Knows nobody aboard — except, somehow, the Queen.',
+    voice: '(the player)',
+    traits: { sociability: 55, kindness: 55, candour: 50, ambition: 45, perception: 60 },
+    home: 'quarters',
+    work: 'market',
+    routine: [
+      SLEEP(23, 7),
+      { from: 7, to: 8, at: 'mess', activity: 'Breakfast, watching who sits with whom' },
+      { from: 8, to: 12, at: [['market', 3], ['dock', 2], ['promenade', 2], ['hydroponics', 1]], activity: 'Finding work', working: true },
+      { from: 12, to: 13, at: 'mess', activity: 'Lunch' },
+      { from: 13, to: 18, at: [['market', 2], ['promenade', 2], ['long-bar', 1], ['chapel', 1], ['archive', 1]], activity: 'Learning the ring' },
+      { from: 18, to: 23, at: [['long-bar', 4], ['mess', 1], ['promenade', 1]], activity: 'Evening among strangers' },
+    ],
+    goal: { id: 'g-belong', text: 'Find your feet on Fortitude', weight: 0.6, kind: 'spread' },
+    secret: { text: 'None yet.' },
+    manages: { agentId: '*', text: 'Everyone is new.' },
+    unspoken: '(the player decides)',
+    knows: [],
+    inventory: ['work chit', 'bunk key'],
+    drives: [],
+    causes: ['community', 'trade'],
+  },
 ]
+
+export const PLAYER_ID = 'player'
+export const RESIDENTS = CAST.filter((c) => !c.isPlayer)
+
+/** The player's display name lives in world settings; one world per process (spec §15). */
+export function setPlayerName(name: string): void {
+  const p = CAST.find((c) => c.isPlayer)
+  if (p && name.trim()) p.name = name.trim().slice(0, 40)
+}
 
 export const CAST_IDS = CAST.map((c) => c.id)
 const byId = new Map(CAST.map((c) => [c.id, c]))
@@ -547,6 +591,12 @@ export const EDGE_SEEDS: Record<string, Partial<EdgeSeed>> = {
 
 /** Bex is warm to everyone; everyone is warm to Bex. Juno is kind to everyone. */
 export function edgeSeed(from: AgentId, to: AgentId): EdgeSeed {
+  // The newcomer is a stranger to everyone — except the Queen, who knows them from home.
+  if (from === PLAYER_ID || to === PLAYER_ID) {
+    const other = from === PLAYER_ID ? to : from
+    if (other === 'alita') return { trust: 62, warmth: 60, tension: 4 }
+    return { trust: 22, warmth: from === 'bex' || from === 'juno' ? 40 : 24, tension: 4 }
+  }
   const base: EdgeSeed = { ...DEFAULT_EDGE }
   if (from === 'bex') base.warmth = 55
   if (to === 'bex') Object.assign(base, { warmth: 52, trust: 40 })

@@ -181,7 +181,7 @@ describe('memory tiers', () => {
     store.pruneSemantic('m', 'sera', 50, 14)
     const left = store.semantic('m', 'sera', 1000)
     expect(left).toHaveLength(50)
-    expect(left.filter((r) => r.kind === 'opinion')).toHaveLength(10)
+    expect(left.filter((r) => r.kind === 'opinion')).toHaveLength(CAST.length - 1)
     expect(left.filter((r) => r.kind === 'summary').map((r) => r.text)).toContain('Day 29')
     expect(left.filter((r) => r.kind === 'summary').map((r) => r.text)).not.toContain('Day 0')
   })
