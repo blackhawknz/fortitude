@@ -20,6 +20,7 @@ import { Engine } from '../engine/engine.js'
 import { AgentRuntime } from '../agents/runtime.js'
 import { localBackendFromEnv, type AgentBackend } from '../agents/backend.js'
 import { loadEnv, parseArgs } from './args.js'
+import { AlitaBackend, AlitaMemorySync, alitaClientFromEnv, castBackends } from '../agents/alita.js'
 
 loadEnv()
 const args = parseArgs()
@@ -46,12 +47,18 @@ if (!args.dormant) {
   backend = localBackendFromEnv()
   if (!backend) out('No LLM configured (FORTITUDE_LLM_*): running dormant, instincts only.')
 }
+// The Queen goes through the Alita system when ALITA_URL is set (falling back to the local model).
+const alitaClient = backend && !args['no-alita'] ? alitaClientFromEnv() : null
+const alitaBackend = alitaClient && backend ? new AlitaBackend(alitaClient, worldId, backend) : null
+const sync = alitaClient ? new AlitaMemorySync(store, worldId, alitaClient) : null
+if (sync) engine.listeners.push(sync)
+
 const runtime = backend
   ? new AgentRuntime({
       store,
       worldId,
       getState: () => engine.state,
-      agents: Object.fromEntries(CAST.map((c) => [c.id, backend!])),
+      agents: castBackends(backend, alitaBackend),
       concurrency: Number(args.concurrency ?? 3),
       onTurn: (t) => {
         if (t.status === 'skipped') return
@@ -73,7 +80,7 @@ engine.listeners.push({
 })
 
 const owed = engine.ticksOwed()
-out(`Fortitude "${worldId}" @ ${formatTime(engine.state.tick)} · ${tickMs / 1000}s/tick · ${runtime ? `${CAST.length} agents via ${backend!.name}` : 'dormant'}${owed ? ` · catching up ${owed} ticks` : ''}`)
+out(`Fortitude "${worldId}" @ ${formatTime(engine.state.tick)} · ${tickMs / 1000}s/tick · ${runtime ? `${CAST.length} agents via ${backend!.name}` : 'dormant'}${alitaClient ? ` · Queen via Alita at ${alitaClient.url}` : ''}${owed ? ` · catching up ${owed} ticks` : ''}`)
 engine.start()
 
 let stopping = false
@@ -83,6 +90,7 @@ process.on('SIGINT', async () => {
   out(`\nStopping @ ${formatTime(engine.state.tick)}…`)
   engine.stop()
   await runtime?.idle()
+  await sync?.idle()
   out(runtime ? `Turns ${runtime.stats.turns}, reflections ${runtime.stats.reflections}, errors ${runtime.stats.errors}. Pending proposals land on next start.` : 'Stopped.')
   process.exit(0)
 })

@@ -34,6 +34,8 @@ export interface RuntimeOptions {
 export interface TurnRecord {
   agentId: AgentId
   kind: 'turn' | 'reflect'
+  /** Which backend actually answered (e.g. 'alita' or 'alita?local:deepseek-chat'). */
+  servedBy?: string
   reflection?: ParsedReflection
   notes?: string[]
   trigger: Trigger
@@ -181,10 +183,13 @@ export class AgentRuntime implements TickListener {
     const record: TurnRecord = { agentId, kind: 'reflect', trigger, status: 'error', tickAsked: state.tick, tickAnswered: state.tick, submittedIntentIds: [], latencyMs: 0 }
     let raw: string | null = null
     let tokens: { p?: number; c?: number } = {}
+    let servedBy = backend.name
     this.stats.reflections++
     try {
       const reply = await this.withTimeout((signal) => backend.reflect(packet, signal))
       raw = reply.raw
+      servedBy = reply.backend
+      record.servedBy = reply.backend
       tokens = { p: reply.promptTokens, c: reply.completionTokens }
       const parsed = parseReflection(reply.json, packet, agentId)
       const now = this.opts.getState()
@@ -211,7 +216,7 @@ export class AgentRuntime implements TickListener {
       agentId,
       tick: record.tickAsked,
       kind: 'reflect',
-      backend: backend.name,
+      backend: servedBy,
       triggerJson: JSON.stringify(trigger),
       packetJson: JSON.stringify(packet),
       responseJson: raw,
@@ -264,12 +269,15 @@ export class AgentRuntime implements TickListener {
     const record: TurnRecord = { agentId, kind: 'turn', trigger, status: 'error', tickAsked: asked.tick, tickAnswered: asked.tick, submittedIntentIds: [], latencyMs: 0 }
     let raw: string | null = null
     let tokens: { p?: number; c?: number } = {}
+    let servedBy = backend.name
     this.stats.turns++
 
     try {
       // Enforce the timeout ourselves: a backend that ignores the signal must not hold a turn slot forever.
       const reply = await this.withTimeout((signal) => backend.turn(packet, signal))
       raw = reply.raw
+      servedBy = reply.backend
+      record.servedBy = reply.backend
       tokens = { p: reply.promptTokens, c: reply.completionTokens }
       // The world moved on while they were thinking. Their intents start from NOW.
       const now = this.opts.getState()
@@ -296,7 +304,7 @@ export class AgentRuntime implements TickListener {
       agentId,
       tick: record.tickAsked,
       kind: 'turn',
-      backend: backend.name,
+      backend: servedBy,
       triggerJson: JSON.stringify(trigger),
       packetJson: JSON.stringify(packet),
       responseJson: raw,

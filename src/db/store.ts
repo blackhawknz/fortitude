@@ -628,6 +628,47 @@ export class WorldStore {
     )
   }
 
+  // ─── External memory outbox ──────────────────────────────────────────
+
+  /**
+   * An agent's memories not yet acknowledged by the external store, oldest
+   * first: episodic rows at or above `minImportance`, and day summaries.
+   */
+  unsyncedMemories(worldId: string, agentId: string, minImportance = 3, limit = 25): { kind: 'episodic' | 'summary'; id: number; text: string; importance: number; tick: number }[] {
+    const episodic = this.db.$client
+      .prepare(
+        `SELECT m.id, m.text, m.importance, m.tick FROM agent_memory_episodic m
+         WHERE m.world_id = ? AND m.agent_id = ? AND m.importance >= ?
+           AND NOT EXISTS (SELECT 1 FROM external_sync s WHERE s.world_id = m.world_id AND s.kind = 'episodic' AND s.local_id = m.id)
+         ORDER BY m.id LIMIT ?`,
+      )
+      .all(worldId, agentId, minImportance, limit) as { id: number; text: string; importance: number; tick: number }[]
+    const summaries = this.db.$client
+      .prepare(
+        `SELECT m.id, m.text, m.updated_tick AS tick FROM agent_memory_semantic m
+         WHERE m.world_id = ? AND m.agent_id = ? AND m.kind = 'summary'
+           AND NOT EXISTS (SELECT 1 FROM external_sync s WHERE s.world_id = m.world_id AND s.kind = 'summary' AND s.local_id = m.id)
+         ORDER BY m.id LIMIT ?`,
+      )
+      .all(worldId, agentId, limit) as { id: number; text: string; tick: number }[]
+    return [
+      ...episodic.map((m) => ({ kind: 'episodic' as const, ...m })),
+      ...summaries.map((m) => ({ kind: 'summary' as const, importance: 4, ...m })),
+    ].sort((a, b) => a.tick - b.tick || a.id - b.id).slice(0, limit)
+  }
+
+  markSynced(worldId: string, kind: 'episodic' | 'summary', localId: number, externalRef: string): void {
+    this.db.insert(t.externalSync).values({ worldId, kind, localId, externalRef, syncedAt: now() }).onConflictDoNothing().run()
+  }
+
+  clearSync(worldId: string): void {
+    this.db.delete(t.externalSync).where(eq(t.externalSync.worldId, worldId)).run()
+  }
+
+  syncedCount(worldId: string): number {
+    return this.db.select({ n: sql<number>`count(*)` }).from(t.externalSync).where(eq(t.externalSync.worldId, worldId)).get()?.n ?? 0
+  }
+
   // ─── Turn log ────────────────────────────────────────────────────────
 
   logTurn(row: Omit<typeof t.agentTurns.$inferInsert, 'id' | 'createdAt'>): void {

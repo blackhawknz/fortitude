@@ -9,7 +9,8 @@ Design: [`fortitude-spec.md`](fortitude-spec.md) · Decisions and corrections: [
 - **Phase 0 — headless world:** done. Deterministic tick loop, schedules, encounters, directed relationships with grudges, a knowledge/secrets model, station decay and incidents, SQLite persistence, exact replay.
 - **Phase 1 — agent runtime:** done, verified on DeepSeek. Context packets, structured responses, intent queue with adjudication, wake triggers, attention budgets, an OpenAI-compatible backend.
 - **Phase 2 — the whole cast:** done. All eleven residents LLM-backed, with a daily reflection pass (goals, opinions, beliefs, memory consolidation, private journals), three memory tiers with caps, speech and confiding as adjudicated knowledge transfers. ~35 LLM calls per in-world day.
-- Phase 3 (Alita adapter), Phase 4 (player): next.
+- **Phase 3 — Alita adapter:** done. The Queen is served by the real Alita system (`POST /agent/turn` / `/agent/reflect`, scoped fiction memory), with automatic fallback to the local model, a circuit breaker, and an outbox that reconciles her memories when Alita returns. See [`docs/alita-integration.md`](docs/alita-integration.md); **restart the Alita backend to load the new routes.**
+- Phase 4 (player): next.
 
 ## Setup
 

@@ -26,6 +26,7 @@ import { AgentRuntime, type TurnRecord } from '../agents/runtime.js'
 import { reflectionDay } from '../agents/reflection.js'
 import { MockBackend, heuristicScript, localBackendFromEnv, type AgentBackend } from '../agents/backend.js'
 import { loadEnv, parseArgs } from './args.js'
+import { AlitaBackend, AlitaMemorySync, alitaClientFromEnv, castBackends } from '../agents/alita.js'
 
 loadEnv()
 const args = parseArgs()
@@ -71,7 +72,7 @@ function printReflection(t: TurnRecord): void {
   const when = formatTime(t.tickAnswered)
   if (t.status !== 'ok') return void out(`\n✎ ${when}  ${name(t.agentId)} — reflection failed: ${t.error}`)
   const r = t.reflection!
-  out(`\n✎ ${when}  ${name(t.agentId)} reflects. ${r.summary ?? ''}`)
+  out(`\n✎ ${when}  ${name(t.agentId)}${t.servedBy && t.servedBy !== backend.name ? ` [via ${t.servedBy}]` : ''} reflects. ${r.summary ?? ''}`)
   for (const o of r.opinions) out(`│ of ${o.agentId} (${o.stance >= 0 ? '+' : ''}${o.stance.toFixed(1)}): ${o.view}`)
   for (const b of r.beliefs) out(`│ believes: ${b.text}`)
   for (const g of r.goals) out(`│ goal ${g.id} [${g.status}] ${g.text ?? ''} ${g.note ? '— ' + g.note : ''}`)
@@ -98,7 +99,8 @@ function printTurn(t: TurnRecord): void {
   if (quiet) {
     const acts = p.intents.map((i) => `${i.kind}${i.target ? ' ' + i.target : ''}${i.to ? '→' + i.to : ''}${i.fact ? ' [' + i.fact + ']' : ''}`).join(', ') || '—'
     const says = p.dialogue ? `  says to ${p.dialogue.to}${p.dialogue.reveals ? ' [reveals ' + p.dialogue.reveals + ']' : ''}: “${p.dialogue.say}”` : ''
-    return void out(`┌ ${when}  ${name(t.agentId)} (${t.trigger.kind}) → ${acts}${says}`)
+    const via = t.servedBy && t.servedBy !== backend.name ? ` [via ${t.servedBy}]` : ''
+    return void out(`┌ ${when}  ${name(t.agentId)}${via} (${t.trigger.kind}) → ${acts}${says}`)
   }
   out(`\n┌ ${when}  ${name(t.agentId)} woke — ${t.trigger.kind} (${t.trigger.urgency.toFixed(2)}): ${t.trigger.detail.slice(0, 160)}`)
   for (const i of p.intents) out(`│ intent  ${i.kind}${i.target ? ' ' + i.target : ''}${i.to ? ' → ' + i.to : ''}${i.fact ? ' [' + i.fact + ']' : ''} (w${i.weight.toFixed(2)}, until ${formatTime(i.expiresTick)}) — ${i.reason}`)
@@ -110,11 +112,19 @@ function printTurn(t: TurnRecord): void {
   out(`└ ${t.latencyMs} ms, asked at ${formatTime(t.tickAsked)}`)
 }
 
+// The Queen goes through the Alita system when ALITA_URL is set (falling back to the local model).
+const alitaClient = args.mock || args['no-alita'] ? null : alitaClientFromEnv()
+const alitaBackend = alitaClient ? new AlitaBackend(alitaClient, worldId, backend) : null
+if (alitaClient) {
+  out(`Alita adapter: ${alitaClient.url} (fallback: ${backend.name})`)
+  engine.listeners.push(new AlitaMemorySync(store, worldId, alitaClient))
+}
+
 const runtime = new AgentRuntime({
   store,
   worldId,
   getState: () => engine.state,
-  agents: Object.fromEntries(agentIds.map((id) => [id, backend])),
+  agents: castBackends(backend, alitaBackend, agentIds),
   onTurn: printTurn,
   concurrency: Number(args.concurrency ?? 4),
   reflection: !args['no-reflect'],

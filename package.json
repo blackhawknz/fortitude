@@ -13,6 +13,7 @@
     "agent": "tsx src/cli/agent.ts",
     "replay": "tsx src/cli/replay.ts",
     "turns": "tsx src/cli/turns.ts",
+    "alita": "tsx src/cli/alita.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",

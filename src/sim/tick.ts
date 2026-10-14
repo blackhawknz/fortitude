@@ -118,7 +118,8 @@ export function advanceTick(prev: WorldState, submissions: readonly Intent[]): T
         kind: 'seek',
         target: other,
         reason: 'In the middle of a conversation.',
-        weight: 0.6,
+        // Strong enough to keep people talking (even past bedtime); only a pressing intent breaks it.
+        weight: 0.75,
         expiresTick: tick + 2,
         source: 'instinct',
         createdTick: tick,

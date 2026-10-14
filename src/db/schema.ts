@@ -252,6 +252,24 @@ export const journals = sqliteTable(
   (t) => [uniqueIndex('journal_agent_day').on(t.worldId, t.agentId, t.day)],
 )
 
+/**
+ * Outbox for memories mirrored to an external store (the Alita system).
+ * A row exists once a memory has been acknowledged; anything missing is
+ * backlog, pushed when the service is reachable. `external_ref` is the
+ * idempotency key on the other side, so retries never duplicate.
+ */
+export const externalSync = sqliteTable(
+  'external_sync',
+  {
+    worldId: text('world_id').notNull(),
+    kind: text('kind').notNull(), // 'episodic' | 'summary'
+    localId: integer('local_id').notNull(),
+    externalRef: text('external_ref').notNull(),
+    syncedAt: integer('synced_at').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.worldId, t.kind, t.localId] })],
+)
+
 /** Every LLM turn: what was asked, what came back, what it cost. */
 export const agentTurns = sqliteTable(
   'agent_turns',
